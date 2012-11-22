@@ -1,5 +1,18 @@
 Revision history for Perl module Clone
 
+0.32  2012-11-22 12:14:07  garu
+  - Stop skipping SvROK handling for all magical scalars. This fixes
+    RT issues 67105, 79730 and 80201 (FLORA).
+  - making the Changes file compliant to the CPAN::Changes spec (GARU).
+  - Fixing tests when Scalar::Util::weaken is not available. As a
+    result, tests should now pass even in odd OpenBSD versions (GARU).
+  - removed dubious documentation on the optional parameter until
+    it is 'fixed'. Right now it just increases the refcount when it's 0,
+    and clones otherwise (which isn't exactly what it says). This
+    fixes RT issue 57773 (GARU).
+  - updated remark on Storable's dclone() to address RT issue 50174 (GARU)
+  - updated Makefile.PL to include test dependencies (GARU)
+
 0.31  2009-01-20 04:54:37  ray
   - Made changes for build failure on Solaris, apparently compiler warnings
     from the last patch are errors in Solaris.
