@@ -129,26 +129,26 @@ package main;
 
 # test for cloning weak reference
 if ( $HAS_WEAKEN ) {
-{
-  my $a = new Test::Hash();
-  my $b = { r => $a };
-  $a->{r} = $b;
-  weaken($b->{'r'});
-  my $c = clone($a);
-}
-
-# another weak reference problem, this one causes a segfault in 0.24
-{
-  my $a = new Test::Hash();
   {
-    my $b = [ $a, $a ];
+    my $a = new Test::Hash();
+    my $b = { r => $a };
     $a->{r} = $b;
-    weaken($b->[0]);
-    weaken($b->[1]);
+    weaken($b->{'r'});
+    my $c = clone($a);
   }
-  my $c = clone($a);
-  # check that references point to the same thing
-  print  "not " unless $c->{'r'}[0] == $c->{'r'}[1];
-  printf "ok %d\n", $::test++;
-}
+
+  # another weak reference problem, this one causes a segfault in 0.24
+  {
+    my $a = new Test::Hash();
+    {
+      my $b = [ $a, $a ];
+      $a->{r} = $b;
+      weaken($b->[0]);
+      weaken($b->[1]);
+    }
+    my $c = clone($a);
+    # check that references point to the same thing
+    print  "not " unless $c->{'r'}[0] == $c->{'r'}[1];
+    printf "ok %d\n", $::test++;
+  }
 }
