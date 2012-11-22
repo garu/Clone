@@ -59,8 +59,7 @@ copies of nested hash, array, scalar and reference types,
 including tied variables and objects.
 
 
-clone() takes a scalar argument and an optional parameter that 
-can be used to limit the depth of the copy. To duplicate lists,
+clone() takes a scalar argument and duplicates it. To duplicate lists,
 arrays or hashes, pass them in by reference. e.g.
     
     my $copy = clone (\@array);
