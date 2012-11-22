@@ -22,7 +22,7 @@ print "ok 1\n";
 # code to test for memory leaks
 
 ## use Benchmark;
-use Data::Dumper;
+## use Data::Dumper;
 # use Storable qw( dclone );
 
 $^W = 1;
