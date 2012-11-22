@@ -1,4 +1,3 @@
-# $Id: Clone.pm,v 0.31 2009/01/20 04:54:37 ray Exp $
 package Clone;
 
 use strict;
