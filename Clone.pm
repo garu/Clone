@@ -66,21 +66,28 @@ arrays or hashes, pass them in by reference. e.g.
     # or
 
     my %copy = %{ clone (\%hash) };
-    
 
-For a slower, but more flexible solution see Storable's dclone().
+=head1 SEE ALSO
 
-=head1 AUTHOR
+L<Storable>'s dclone() is a flexible solution for cloning variables,
+albeit slower for average-sized data structures. Simple
+and naive benchmarks show that Clone is faster for data structures
+with 3 or less levels, while dclone() can be faster for structures
+4 or more levels deep.
 
-Ray Finch, rdf@cpan.org
+=head1 COPYRIGHT
 
-Copyright 2001-2012 Ray Finch.
+Copyright 2001-2012 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
 
-=head1 SEE ALSO
+=head1 AUTHOR
 
-L<Storable>
+Ray Finch C<< <rdf@cpan.org> >>
+
+Breno G. de Oliveira C<< <garu@cpan.org> >> and
+Florian Ragwitz C<< <rafl@debian.org> >> perform routine maintenance
+releases since 2012.
 
 =cut
