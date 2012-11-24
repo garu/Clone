@@ -129,32 +129,32 @@ Revision history for Perl module Clone
 0.10  2001-04-29 21:48:45  ray
   - VERSION 0.10
 
-0.9.2.3  2001-03-11 00:54:41  ray
+0.09.2.3  2001-03-11 00:54:41  ray
   - change call to rv_clone in clone to sv_clone; this allows any scalar to
     be cloned.
 
-0.9.2.2  2001-03-11 00:50:01  ray
+0.09.2.2  2001-03-11 00:50:01  ray
   - version 0.09.3: cleaned up code, consolidated MAGIC.
 
-0.9.2.1  2001-03-05 16:01:52  ray
+0.09.2.1  2001-03-05 16:01:52  ray
   - added support for double-types.
 
-0.9  2000-08-21 23:05:55  ray
+0.09  2000-08-21 23:05:55  ray
   - added support for code refs
 
-0.8  2000-08-11 17:08:24  ray
+0.08  2000-08-11 17:08:24  ray
   - Release 0.08.
 
-0.7  2000-08-01 00:31:24  ray
+0.07  2000-08-01 00:31:24  ray
   - release 0.07.
 
-0.6.2.3  2000-07-28 20:40:25  ray
+0.06.2.3  2000-07-28 20:40:25  ray
   - added support for circular references
 
-0.6.2.2  2000-07-28 19:04:14  ray
+0.06.2.2  2000-07-28 19:04:14  ray
   - first pass at circular references.
 
-0.6.2.1  2000-07-28 18:54:33  ray
+0.06.2.1  2000-07-28 18:54:33  ray
   - added support for scalar types.
 
 0.06  Thu May 25 17:48:59 2000 GMT
