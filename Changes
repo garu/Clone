@@ -1,5 +1,8 @@
 Revision history for Perl module Clone
 
+0.33  2012-11-24 11:37:22  garu
+  - fix typo in croak message (Salvatore Bonaccorso)
+
 0.32  2012-11-22 12:14:07  garu
   - Stop skipping SvROK handling for all magical scalars. This fixes
     RT issues 67105, 79730 and 80201 (FLORA).
