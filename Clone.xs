@@ -194,7 +194,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
         clone = SvREFCNT_inc(ref);  /* just return the ref */
         break;
       default:
-        croak("unkown type: 0x%x", SvTYPE(ref));
+        croak("unknown type: 0x%x", SvTYPE(ref));
     }
 
   /**
