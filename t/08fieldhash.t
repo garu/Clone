@@ -5,7 +5,7 @@ use warnings;
 use Test::More;
 
 use Clone 'clone';
-use Hash::Util::FieldHash 'fieldhash';
+use Hash::Util::FieldHash::Compat 'fieldhash';
 
 fieldhash my %hash;
 
