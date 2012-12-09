@@ -20,6 +20,7 @@ WriteMakefile(
       resources => {
         license    => 'http://dev.perl.org/licenses/',
         bugtracker => 'http://rt.cpan.org/NoAuth/Bugs.html?Dist=Clone',
+        repository => 'http://github.com/garu/Clone',
       },
     },
 );
