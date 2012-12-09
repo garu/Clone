@@ -15,7 +15,7 @@ require AutoLoader;
 @EXPORT = qw();
 @EXPORT_OK = qw( clone );
 
-$VERSION = '0.33';
+$VERSION = '0.34';
 
 bootstrap Clone $VERSION;
 
