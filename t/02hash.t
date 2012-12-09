@@ -7,10 +7,19 @@
 # Change 1..1 below to 1..last_test_to_print .
 # (It may become useful if the test is moved to ./t subdirectory.)
 
-BEGIN { $| = 1; print "1..12\n"; }
+my $has_data_dumper;
+BEGIN {
+  $| = 1;
+  my $tests = 11;
+  eval q[use Data::Dumper];
+  if (!$@) {
+    $has_data_dumper = 1;
+    $tests++;
+  }
+  print "1..$tests\n";
+}
 END {print "not ok 1\n" unless $loaded;}
 use Clone qw( clone );
-use Data::Dumper;
 $loaded = 1;
 print "ok 1\n";
 
@@ -82,7 +91,9 @@ $c->{href}{href}{href} == $a->{href}{href}{href} ? ok : not_ok;
 my %circ = ();
 $circ{c} = \%circ;
 my $cref = clone(\%circ);
-Dumper(\%circ) eq Dumper($cref) ? ok : not_ok;
+if ($has_data_dumper) {
+  Dumper(\%circ) eq Dumper($cref) ? ok : not_ok;
+}
 
 # test for unicode support
 {
