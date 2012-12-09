@@ -2,10 +2,19 @@
 
 use strict;
 use warnings;
-use Test::More;
 
 use Clone 'clone';
-use Hash::Util::FieldHash 'fieldhash';
+
+BEGIN {
+  use Test::More;
+  eval {
+    require Hash::Util::FieldHash;
+    Hash::Util::FieldHash->import('fieldhash');
+  };
+  if ($@) {
+    plan skip_all => 'Hash::Util::FieldHash not available';
+  }
+}
 
 fieldhash my %hash;
 
