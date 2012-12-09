@@ -10,9 +10,6 @@ WriteMakefile(
     'BUILD_REQUIRES' => {
       'Test::More'            => 0,
       'Scalar::Util'          => 0,
-      'Data::Dumper'          => 0,
-      'Storable'              => 0,
-      'Hash::Util::FieldHash' => 0,
     },
     'LIBS'          => [''],     # e.g., '-lm'
     'DEFINE'        => '',       # e.g., '-DHAVE_SOMETHING'
