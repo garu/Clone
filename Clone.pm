@@ -32,12 +32,12 @@ Clone - recursively copy Perl datatypes
 
 =head1 SYNOPSIS
 
-  use Clone;
-  
-  push @Foo::ISA, 'Clone';
+  package Foo;
+  use parent 'Clone';
 
-  $a = new Foo;
-  $b = $a->clone();
+  package main;
+  my $original = Foo->new;
+  $copy = $original->clone;
   
   # or
 
@@ -45,7 +45,7 @@ Clone - recursively copy Perl datatypes
   
   $a = { 'foo' => 'bar', 'move' => 'zig' };
   $b = [ 'alpha', 'beta', 'gamma', 'vlissides' ];
-  $c = new Foo();
+  $c = Foo->new;
 
   $d = clone($a);
   $e = clone($b);
