@@ -121,12 +121,20 @@ sv_clone (SV * ref, HV* hseen, int depth)
 {
   SV *clone = ref;
   SV **seen = NULL;
+  UV visible;
+
+  if (!ref)
+    {
+      TRACEME(("NULL\n"));
+      return NULL;
+    }
+
 #if PERL_REVISION >= 5 && PERL_VERSION > 8
   /* This is a hack for perl 5.9.*, save everything */
   /* until I find out why mg_find is no longer working */
-  UV visible = 1;
+  visible = 1;
 #else
-  UV visible = (SvREFCNT(ref) > 1) || (SvMAGICAL(ref) && mg_find(ref, '<'));
+  visible = (SvREFCNT(ref) > 1) || (SvMAGICAL(ref) && mg_find(ref, '<'));
 #endif
   int magic_ref = 0;
 
