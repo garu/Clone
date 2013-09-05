@@ -1,5 +1,8 @@
 Revision history for Perl module Clone
 
+0.35 2013-06-30 18:06:54  garu
+  - SV's can be NULL (shit happens) (fixes RT86217) (Tux)
+
 0.34 2012-12-09 14:46:09  garu
   - making some tests optional (fixes RT81774) (GARU)
   - modernizing synopsis (GARU)
