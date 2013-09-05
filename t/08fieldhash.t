@@ -14,6 +14,9 @@ BEGIN {
   if ($@) {
     plan skip_all => 'Hash::Util::FieldHash not available';
   }
+  else {
+    plan tests => 1;
+  }
 }
 
 fieldhash my %hash;
@@ -25,4 +28,3 @@ exists $hash{ \$var };
 my $cloned = clone($var);
 cmp_ok($cloned, '!=', $var);
 
-done_testing;
