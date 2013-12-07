@@ -122,6 +122,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
   SV *clone = ref;
   SV **seen = NULL;
   UV visible;
+  int magic_ref = 0;
 
   if (!ref)
     {
@@ -136,7 +137,6 @@ sv_clone (SV * ref, HV* hseen, int depth)
 #else
   visible = (SvREFCNT(ref) > 1) || (SvMAGICAL(ref) && mg_find(ref, '<'));
 #endif
-  int magic_ref = 0;
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
