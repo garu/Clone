@@ -9,19 +9,12 @@ require DynaLoader;
 require AutoLoader;
 
 @ISA = qw(Exporter DynaLoader);
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
 @EXPORT = qw();
 @EXPORT_OK = qw( clone );
 
 $VERSION = '0.35';
 
 bootstrap Clone $VERSION;
-
-# Preloaded methods go here.
-
-# Autoload methods go after =cut, and are processed by the autosplit program.
 
 1;
 __END__
@@ -77,7 +70,7 @@ with 3 or less levels, while dclone() can be faster for structures
 
 =head1 COPYRIGHT
 
-Copyright 2001-2012 Ray Finch. All Rights Reserved.
+Copyright 2001-2013 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
