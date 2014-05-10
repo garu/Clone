@@ -1,7 +1,7 @@
 Clone - recursively copy Perl datatypes
 =======================================
 
-This module provides a clone() method which makes recursive
+This module provides a ```clone()``` method which makes recursive
 copies of nested hash, array, scalar and reference types,
 including tied variables and objects.
 
@@ -49,7 +49,7 @@ arrays or hashes, pass them in by reference. e.g.
 See Also
 --------
 
-(Storable)[https://metacpan.org/pod/Storable]'s ```dclone()``` is a flexible solution for cloning variables,
+[Storable](https://metacpan.org/pod/Storable)'s ```dclone()``` is a flexible solution for cloning variables,
 albeit slower for average-sized data structures. Simple
 and naive benchmarks show that Clone is faster for data structures
 with 3 or less levels, while ```dclone()``` can be faster for structures
