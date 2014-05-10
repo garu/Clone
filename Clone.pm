@@ -47,13 +47,13 @@ Clone - recursively copy Perl datatypes
 =head1 DESCRIPTION
 
 This module provides a clone() method which makes recursive
-copies of nested hash, array, scalar and reference types, 
+copies of nested hash, array, scalar and reference types,
 including tied variables and objects.
 
 
 clone() takes a scalar argument and duplicates it. To duplicate lists,
 arrays or hashes, pass them in by reference. e.g.
-    
+
     my $copy = clone (\@array);
 
     # or
@@ -70,7 +70,7 @@ with 3 or less levels, while dclone() can be faster for structures
 
 =head1 COPYRIGHT
 
-Copyright 2001-2013 Ray Finch. All Rights Reserved.
+Copyright 2001-2014 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
