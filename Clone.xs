@@ -45,7 +45,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth)
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
   hv_iterinit (self);
-  while (next = hv_iternext (self))
+  while ((next = hv_iternext (self)))
     {
       SV *key = hv_iterkeysv (next);
       TRACEME(("clone item %s\n", SvPV_nolen(key) ));
@@ -278,7 +278,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
                  mg->mg_len);
       }
       /* major kludge - why does the vtable for a qr type need to be null? */
-      if ( mg = mg_find(clone, 'r') )
+      if ( (mg = mg_find(clone, 'r')) )
         mg->mg_virtual = (MGVTBL *) NULL;
     }
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
