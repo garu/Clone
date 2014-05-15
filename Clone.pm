@@ -1,18 +1,17 @@
 package Clone;
 
 use strict;
-use Carp;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK $AUTOLOAD);
 
 require Exporter;
 require DynaLoader;
 require AutoLoader;
 
-@ISA = qw(Exporter DynaLoader);
-@EXPORT = qw();
+@ISA       = qw(Exporter DynaLoader);
+@EXPORT    = qw();
 @EXPORT_OK = qw( clone );
 
-$VERSION = '0.36';
+$VERSION = '0.37';
 
 bootstrap Clone $VERSION;
 
@@ -25,33 +24,40 @@ Clone - recursively copy Perl datatypes
 
 =head1 SYNOPSIS
 
-  package Foo;
-  use parent 'Clone';
+    use Clone 'clone';
 
-  package main;
-  my $original = Foo->new;
-  $copy = $original->clone;
-  
-  # or
+    my $data = {
+       set => [ 1 .. 50 ],
+       foo => {
+           answer => 42,
+           object => SomeObject->new,
+       },
+    };
 
-  use Clone qw(clone);
-  
-  $a = { 'foo' => 'bar', 'move' => 'zig' };
-  $b = [ 'alpha', 'beta', 'gamma', 'vlissides' ];
-  $c = Foo->new;
+    my $cloned_data = clone($data);
 
-  $d = clone($a);
-  $e = clone($b);
-  $f = clone($c);
+    $cloned_data->{foo}{answer} = 1;
+    print $cloned_data->{foo}{answer};  # '1'
+    print $data->{foo}{answer};         # '42'
+
+You can also add it to your class:
+
+    package Foo;
+    use parent 'Clone';
+    sub new { bless {}, shift }
+
+    package main;
+
+    my $obj = Foo->new;
+    my $copy = $obj->clone;
 
 =head1 DESCRIPTION
 
-This module provides a clone() method which makes recursive
+This module provides a C<clone()> method which makes recursive
 copies of nested hash, array, scalar and reference types,
 including tied variables and objects.
 
-
-clone() takes a scalar argument and duplicates it. To duplicate lists,
+C<clone()> takes a scalar argument and duplicates it. To duplicate lists,
 arrays or hashes, pass them in by reference. e.g.
 
     my $copy = clone (\@array);
@@ -62,10 +68,10 @@ arrays or hashes, pass them in by reference. e.g.
 
 =head1 SEE ALSO
 
-L<Storable>'s dclone() is a flexible solution for cloning variables,
+L<Storable>'s C<dclone()> is a flexible solution for cloning variables,
 albeit slower for average-sized data structures. Simple
 and naive benchmarks show that Clone is faster for data structures
-with 3 or less levels, while dclone() can be faster for structures
+with 3 or less levels, while C<dclone()> can be faster for structures
 4 or more levels deep.
 
 =head1 COPYRIGHT
