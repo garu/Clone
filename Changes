@@ -1,5 +1,10 @@
 Revision history for Perl module Clone
 
+0.37 2014-05-15 16:45:33  garu
+  - removed Carp dependency (GARU)
+  - silenced some clang warnings (JACQUESG)
+  - added a README (GARU)
+
 0.36 2013-12-07 17:36:04  garu
   - fixed compilation issue on AIX and C89 (GAAS)
 
