@@ -17,7 +17,6 @@ sub ok {
 }
 
 package dump;
-use Carp;
 
 %dump = (
 	'SCALAR'	=> 'dump_scalar',
@@ -30,7 +29,7 @@ use Carp;
 # Given an object, dump its transitive data closure
 sub main'dump {
 	my ($object) = @_;
-	croak "Not a reference!" unless ref($object);
+	die "Not a reference!" unless ref($object);
 	local %dumped;
 	local %object;
 	local $count = 0;
@@ -78,7 +77,7 @@ sub recursive_dump {
 	# If the referenced was blessed, we bless it once the object is dumped.
 	# The retrieval code will perform the same on the last object retrieved.
 
-	croak "Unknown simple type '$ref'" unless defined $dump{$ref};
+	die "Unknown simple type '$ref'" unless defined $dump{$ref};
 
 	&{$dump{$ref}}($object);	# Dump object
 	&bless($bless) if $bless;	# Mark it as blessed, if necessary
