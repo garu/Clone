@@ -1,6 +1,10 @@
 Clone - recursively copy Perl datatypes
 =======================================
 
+[![Build Status](https://travis-ci.org/garu/Clone.png?branch=master)](https://travis-ci.org/garu/Clone)
+[![Coverage Status](https://coveralls.io/repos/garu/Clone/badge.png?branch=master)](https://coveralls.io/r/garu/Clone?branch=master)
+[![CPAN version](https://badge.fury.io/pl/Clone.svg)](https://metacpan.org/pod/Clone)
+
 This module provides a `clone()` method which makes recursive
 copies of nested hash, array, scalar and reference types,
 including tied variables and objects.
