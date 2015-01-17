@@ -41,7 +41,7 @@ You can also add it to your class:
 ```
 
 `clone()` takes a scalar argument and duplicates it. To duplicate lists,
-arrays or hashes, pass them in by reference. e.g.
+arrays or hashes, pass them in by reference, e.g.
 
 ```perl
     my $copy = clone (\@array);
@@ -57,7 +57,7 @@ See Also
 [Storable](https://metacpan.org/pod/Storable)'s `dclone()` is a flexible solution for cloning variables,
 albeit slower for average-sized data structures. Simple
 and naive benchmarks show that Clone is faster for data structures
-with 3 or less levels, while `dclone()` can be faster for structures
+with 3 or fewer levels, while `dclone()` can be faster for structures
 4 or more levels deep.
 
 COPYRIGHT
