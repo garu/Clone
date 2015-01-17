@@ -22,6 +22,11 @@ __END__
 
 Clone - recursively copy Perl datatypes
 
+=for html
+<a href="https://travis-ci.org/garu/Clone"><img src="https://travis-ci.org/garu/Clone.png?branch=master" alt="Build Status"></a>
+<a href="https://coveralls.io/r/garu/Clone?branch=master"><img src="https://coveralls.io/repos/garu/Clone/badge.png?branch=master" alt="Coverage Status"></a>
+<a href="https://metacpan.org/pod/Clone"><img src="https://badge.fury.io/pl/Clone.svg" alt="CPAN version"></a>
+
 =head1 SYNOPSIS
 
     use Clone 'clone';
