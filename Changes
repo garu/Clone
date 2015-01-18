@@ -1,5 +1,9 @@
 Revision history for Perl module Clone
 
+0.38 2015-01-18 19:27:41  garu
+  - typo fixes and improvements to the README (zmughal)
+  - travis/coveralls integration (zmughal)
+
 0.37 2014-05-15 16:45:33  garu
   - removed Carp dependency (GARU)
   - silenced some clang warnings (JACQUESG)
