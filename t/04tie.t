@@ -17,8 +17,8 @@ print "ok 1\n";
 
 my $test = 2;
 
-require 't/dump.pl';
-require 't/tied.pl';
+require './t/dump.pl';
+require './t/tied.pl';
 
 my ($a, @a, %a);
 tie $a, TIED_SCALAR;

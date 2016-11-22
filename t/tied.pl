@@ -50,7 +50,7 @@
 # Baseline for first beta release.
 #
 
-require 't/dump.pl';
+require './t/dump.pl';
 
 package TIED_HASH;
 
