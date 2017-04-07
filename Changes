@@ -1,5 +1,9 @@
 Revision history for Perl module Clone
 
+0.39 2017-04-07 13:06:00  garu
+  - use explicit '.' in tests since it may not be in @INC
+    anymore in newer perls (fixes RT120648) (PLICEASE, SIMCOP)
+
 0.38 2015-01-18 19:27:41  garu
   - typo fixes and improvements to the README (zmughal)
   - travis/coveralls integration (zmughal)
