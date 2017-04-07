@@ -55,7 +55,7 @@
 # Baseline for first beta release.
 #
 
-require 't/dump.pl';
+require './t/dump.pl';
 
 # use Storable qw(dclone);
 use Clone qw(clone);
