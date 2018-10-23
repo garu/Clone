@@ -241,8 +241,8 @@ sv_clone (SV * ref, HV* hseen, int depth)
     * to properly handle circular references. cb 2001-02-06
     */
 
-  if ( visible )
-    CLONE_STORE(ref,clone);
+  if ( visible && ref != clone )
+      CLONE_STORE(ref,clone);
 
     /*
      * We'll assume (in the absence of evidence to the contrary) that A) a
