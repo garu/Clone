@@ -6,14 +6,18 @@ use warnings;
 use Test::More;    # we should consider moving to Test2...
 
 use Clone 'clone';
-use B::COW qw{:all};
 
-if ( !can_cow() ) {
-    plan skip_all => 'this test is only designed to work on Perl Versions supporting COW';
+BEGIN {
+
+    # Travis issue on 5.8.8 (maybe the module is too recent...)
+    my $load_B_COW = eval { require B::COW; B::COW->import(q/:all/); 1 };
+
+    if ( $@ || !$load_B_COW || !B::COW::can_cow() ) {
+        plan skip_all => 'this test is only designed to work on Perl Versions supporting COW';
+    }
 }
-else {
-    plan tests => 42;
-}
+
+plan tests => 42;
 
 {
     note "Simple SvPV";
