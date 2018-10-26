@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Test::More;    # we should consider moving to Test2...
-
 use Clone 'clone';
 
 BEGIN {
@@ -17,7 +16,7 @@ BEGIN {
     }
 }
 
-plan tests => 42;
+plan tests => 59;
 
 {
     note "Simple SvPV";
@@ -108,4 +107,42 @@ plan tests => 42;
 
     my $clone = clone($hash);
     ok ref $clone, "clone success - no SEGV";
+}
+
+{
+    note "playing with the limit: cowrefcnt_max";
+
+    my $max = cowrefcnt_max();
+    ok $max, "we got a max";
+
+    cmp_ok $max, '>', 2, "this should be greater than 2 :-)" or die;
+
+    # first let's do a stop just before max
+    my $str = "abcd";
+    my @a;
+    push @a, $str for 1 .. ( $max - 3 );
+    is cowrefcnt($str), $max - 2, "we are at max-2";
+
+    # now increase to max
+    push @a, clone($str);
+    is cowrefcnt($str), $max - 1, "we are now at max-1" or die;
+    is cowrefcnt( $a[-1] ), $max - 1, "we are now at max-1: a[-1]";
+
+    # now is time to bypass max
+    for ( 1 .. 2 ) {
+        push @a, clone($str);
+        is cowrefcnt($str), $max - 1, "str stays at max -1";
+        ok is_cow( $a[-1] ), "our clone is COWed when bypassing max";
+        is cowrefcnt( $a[-1] ), 0, "cowrefcnt for a[-1] is 0";
+    }
+
+    is cowrefcnt( $a[-2] ), 0, "cowrefcnt for a[-2] is 0";
+    is cowrefcnt( $a[-3] ), $max - 1, "cowrefcnt for a[-3] is max - 1";
+
+    push @a, clone( $a[-1] );
+    is cowrefcnt( $a[-1] ), 1, "cowrefcnt for a[-1] is 1";
+    is cowrefcnt( $a[-2] ), 1, "cowrefcnt for a[-2] is 1";
+    is cowrefcnt( $a[-3] ), 0, "cowrefcnt for a[-3] is 0";
+    is cowrefcnt( $a[-4] ), $max - 1, "cowrefcnt for a[-4] is max - 1";
+
 }
