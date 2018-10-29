@@ -101,14 +101,13 @@ rv_clone (SV * ref, HV* hseen, int depth)
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
-  if (!SvROK (ref))
+  if (!SvROK(ref))
     return NULL;
 
-  if (sv_isobject (ref))
-    {
-      clone = newRV_noinc(sv_clone (SvRV(ref), hseen, depth));
+  if (sv_isobject (ref)) {
+      clone = newRV_noinc( sv_clone(SvRV(ref), hseen, depth) );
       sv_2mortal (sv_bless (clone, SvSTASH (SvRV (ref))));
-    }
+  }
   else
     clone = newRV_inc(sv_clone (SvRV(ref), hseen, depth));
     
@@ -160,6 +159,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
         TRACEME(("int scalar\n"));
       case SVt_NV:		/* 2 */
         TRACEME(("double scalar\n"));
+
         clone = newSVsv (ref);
         break;
 #if PERL_VERSION <= 10
@@ -327,12 +327,12 @@ sv_clone (SV * ref, HV* hseen, int depth)
     {
       TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
       SvREFCNT_dec(SvRV(clone));
-      SvRV(clone) = sv_clone (SvRV(ref), hseen, depth); /* Clone the referent */
-      if (sv_isobject (ref))
-      {
+      SvRV(clone) = sv_clone(SvRV(ref), hseen, depth); /* Clone the referent */
+      if (sv_isobject (ref)) {
           sv_bless (clone, SvSTASH (SvRV (ref)));
       }
       if (SvWEAKREF(ref)) {
+          if (SvREFCNT(SvRV(clone)) <= 2) SvREFCNT_inc(SvRV(clone)); /* weaken is going to decrease it... */
           sv_rvweaken(clone);
       }
     }
