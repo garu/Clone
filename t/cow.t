@@ -12,8 +12,11 @@ BEGIN {
     # Travis issue on 5.8.8 (maybe the module is too recent...)
     my $load_B_COW = eval { require B::COW; B::COW->import(q/:all/); 1 };
 
-    if ( $@ || !$load_B_COW || !B::COW::can_cow() ) {
-        plan skip_all => 'this test is only designed to work on Perl Versions supporting COW';
+    if ( $@ || !$load_B_COW ) {
+        plan skip_all => 'This test requires B::COW to run.';
+    }
+    if ( !B::COW::can_cow() ) {
+        plan skip_all => 'This test is only designed to work on Perl Versions supporting COW';
     }
 }
 
