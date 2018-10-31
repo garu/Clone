@@ -176,26 +176,33 @@ sv_clone (SV * ref, HV* hseen, int depth)
 */
 #if PERL_VERSION >= 20 && !defined(PERL_DEBUG_READONLY_COW)
         /* only for simple PVs unblessed */
-        if ( SvIsCOW(ref) && !SvOOK(ref) && SvLEN(ref) > 0
-            && CowREFCNT(ref) < SV_COW_REFCNT_MAX ) {
-          /* cannot use newSVpv_share as this going to use a new PV we do not want to clone it */
-          /* create a fresh new PV */
-          clone = newSV(0);
-          sv_upgrade(clone, SVt_PV);
-          SvPOK_on(clone);
-          SvIsCOW_on(clone);
+        if ( SvIsCOW(ref) && !SvOOK(ref) && SvLEN(ref) > 0 ) {
 
-          /* points the str slot to the COWed one */
-          SvPV_set(clone, SvPVX(ref) );
-          CowREFCNT(ref)++;
+          if ( CowREFCNT(ref) < (SV_COW_REFCNT_MAX - 1) ) {
+            /* cannot use newSVpv_share as this going to use a new PV we do not want to clone it */
+            /* create a fresh new PV */
+            clone = newSV(0);
+            sv_upgrade(clone, SVt_PV);
+            SvPOK_on(clone);
+            SvIsCOW_on(clone);
 
-          /* preserve cur, len, flags and utf8 flag */
-          SvCUR_set(clone, SvCUR(ref));
-          SvLEN_set(clone, SvLEN(ref));
-          //SvFLAGS(clone) = SvFLAGS(ref);
+            /* points the str slot to the COWed one */
+            SvPV_set(clone, SvPVX(ref) );
+            CowREFCNT(ref)++;
 
-          if (SvUTF8(ref))
-            SvUTF8_on(clone);
+            /* preserve cur, len, flags and utf8 flag */
+            SvCUR_set(clone, SvCUR(ref));
+            SvLEN_set(clone, SvLEN(ref));
+            SvFLAGS(clone) = SvFLAGS(ref); /* preserve all the flags from the original SV */
+
+            if (SvUTF8(ref))
+              SvUTF8_on(clone);
+          } else {
+            /* we are above SV_COW_REFCNT_MAX, create a new SvPV but preserve the COW */
+            clone = newSVsv (ref);
+            SvIsCOW_on(clone);
+            CowREFCNT(clone) = 0; /* set the CowREFCNT to 0 */
+          }
 
         } else {
           clone = newSVsv (ref);
