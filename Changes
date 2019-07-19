@@ -1,5 +1,11 @@
 Revision history for Perl module Clone
 
+0.42 2019-07-19 23:06:04  garu
+  - make handling of mg_ptr safer (ATOOMIC, Harald Jörg)
+  - change license wording on some test files to
+    make the entire dist released under the same
+    terms as Perl itself (fixes GH#20) (GARU)
+
 0.41 2018-10-25 10:20:03  garu
   - Check the CowREFCNT of a COWed PV (ATOOMIC)
     this should fix some issues people have been
