@@ -290,18 +290,14 @@ sv_clone (SV * ref, HV* hseen, int depth)
               obj = mg->mg_obj; 
               break;
             case 't':	/* PERL_MAGIC_taint */
-	      continue;
-              break;
-            case '<':	/* PERL_MAGIC_backref */
-	      continue;
-              break;
+            case '<': /* PERL_MAGIC_backref */
             case '@':  /* PERL_MAGIC_arylen_p */
-             continue;
+              continue;
               break;
             case 'P': /* PERL_MAGIC_tied */
             case 'p': /* PERL_MAGIC_tiedelem */
             case 'q': /* PERL_MAGIC_tiedscalar */
-	      magic_ref++;
+	            magic_ref++;
 	      /* fall through */
             default:
               obj = sv_clone(mg->mg_obj, hseen, -1); 
@@ -309,12 +305,39 @@ sv_clone (SV * ref, HV* hseen, int depth)
         } else {
           TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
         }
-	/* this is plain old magic, so do the same thing */
-        sv_magic(clone, 
-                 obj,
-                 mg->mg_type, 
-                 mg->mg_ptr, 
-                 mg->mg_len);
+
+        { /* clone the mg_ptr pv */
+          char *mg_ptr = mg->mg_ptr; /* default */
+
+          if (mg->mg_len >= 0) { /* copy the pv */
+            if (mg_ptr) {
+              Newxz(mg_ptr, mg->mg_len+1, char); /* add +1 for the NULL at the end? */
+              Copy(mg->mg_ptr, mg_ptr, mg->mg_len, char);
+            }
+          } else if (mg->mg_len == HEf_SVKEY) {
+            /* let's share the SV for now */
+            SvREFCNT_inc((SV*)mg->mg_ptr);
+            /* maybe we also want to clone the SV... */
+            //if (mg_ptr) mg->mg_ptr = (char*) sv_clone((SV*)mg->mg_ptr, hseen, -1); 
+          } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
+            if (mg->mg_ptr) {
+              STRLEN *cache;
+              Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+              mg_ptr = (char *) cache;
+              Copy(mg->mg_ptr, mg_ptr, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+            }
+          } else {
+            croak("Unsupported magic_ptr clone");
+          }
+
+          /* this is plain old magic, so do the same thing */
+          sv_magic(clone,
+                   obj,
+                   mg->mg_type,
+                   mg_ptr,
+                   mg->mg_len);
+
+        }
       }
       /* major kludge - why does the vtable for a qr type need to be null? */
       if ( (mg = mg_find(clone, 'r')) )
