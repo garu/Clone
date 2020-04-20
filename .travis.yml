@@ -23,6 +23,8 @@ matrix:
     - perl: blead
 before_install:
   - eval $(curl https://travis-perl.github.io/init) --auto
+install:
+  - cpan-install B::COW
 branches:
   except:
     - /^wip\//
