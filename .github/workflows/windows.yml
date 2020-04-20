@@ -1,0 +1,36 @@
+name: windows
+
+on:
+  push:
+    branches:
+      - '*'
+    tags-ignore:
+      - '*'
+  pull_request:
+
+jobs:
+  perl:
+    env:
+      PERL_USE_UNSAFE_INC: 0
+      AUTHOR_TESTING: 0
+      AUTOMATED_TESTING: 1
+      RELEASE_TESTING: 0
+
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@master
+      - name: Set up Perl
+        run: |
+          choco install strawberryperl
+          echo "##[add-path]C:\strawberry\c\bin;C:\strawberry\perl\site\bin;C:\strawberry\perl\bin"
+      - name: perl -V
+        run: perl -V
+      - name: install deps using cpm
+        uses: perl-actions/install-with-cpm@v1.3
+        with:
+          install: |
+            B::COW
+          sudo: false
+      - run: perl Makefile.PL
+      - run: make test
