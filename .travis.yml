@@ -1,6 +1,7 @@
 language: perl
 perl:
   - "blead"
+  - "5.32"
   - "5.30"
   - "5.28"
   - "5.26"
