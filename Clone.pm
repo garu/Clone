@@ -1,19 +1,19 @@
 package Clone;
 
 use strict;
-use vars qw($VERSION @ISA @EXPORT @EXPORT_OK $AUTOLOAD);
+our $AUTOLOAD;
 
 require Exporter;
-require DynaLoader;
 require AutoLoader;
+use XSLoader ();
 
-@ISA       = qw(Exporter DynaLoader);
-@EXPORT    = qw();
-@EXPORT_OK = qw( clone );
+our @ISA       = qw(Exporter);
+our @EXPORT;
+our @EXPORT_OK = qw( clone );
 
-$VERSION = '0.45';
+our $VERSION = '0.45';
 
-bootstrap Clone $VERSION;
+XSLoader::load('Clone', $VERSION);
 
 1;
 __END__
