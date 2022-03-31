@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v2
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1.3
+        uses: perl-actions/install-with-cpm@stable
         with:
           install: |
             B::COW
@@ -36,6 +36,26 @@ jobs:
       - run: make
       - run: make test
 
+  no-b-cow:
+    runs-on: ubuntu-latest
+
+    needs: ubuntu-latest
+
+    env:
+      PERL_USE_UNSAFE_INC: 0
+      AUTHOR_TESTING: 1
+      AUTOMATED_TESTING: 1
+      RELEASE_TESTING: 1
+      PERL_CARTON_PATH: $GITHUB_WORKSPACE/local
+
+    steps:
+      - uses: actions/checkout@v2
+      - run: perl -V
+      - run: perl Makefile.PL
+      - run: make
+      - run: make test
+
+#
 ###
 ### linux testing multiple Perl versions
 ###
@@ -48,6 +68,8 @@ jobs:
       fail-fast: false
       matrix:
         perl-version:
+          - "5.34"
+          - "5.32"
           - "5.30"
           - "5.28"
           - "5.26"
@@ -82,100 +104,4 @@ jobs:
           AUTHOR_TESTING: 1
           AUTOMATED_TESTING: 1
           RELEASE_TESTING: 1
-
-###
-### macOS testing
-###
-
-  macos:
-    name: macOS Perl v${{ matrix.perl-version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["macos-latest"]
-        perl-version:
-          - "5.30"
-          - "5.28"
-          - "5.26"
-          - "5.24"
-          - "5.22"
-          - "5.20"
-          - "5.18"
-          - "5.16"
-          - "5.14"
-          - "5.12"
-          - "5.10"
-    needs: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set Up Perl
-        uses: shogo82148/actions-setup-perl@v1.3.0
-        with:
-          perl-version: ${{ matrix.perl-version }}
-      - run: perl -V
-      - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1.3
-        with:
-          install: |
-            B::COW
-          sudo: false
-      - name: perl Makefile.PL
-        run: perl Makefile.PL
-      - name: make
-        run: make
-      - name: Run Tests
-        run: make test
-        env:
-          AUTHOR_TESTING: 1
-          RELEASE_TESTING: 1   
-
-###
-### windows testing
-###
-
-  windows:
-    name: windows Perl v${{ matrix.perl-version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["windows-latest"]
-        perl-version:
-          - "5.30"
-          - "5.28"
-          - "5.26"
-          - "5.24"
-          # make issue <= 5.22 view GH issue https://github.com/shogo82148/actions-setup-perl/issues/223
-          # - "5.22"
-          # - "5.20.3"
-          # - "5.18.4"
-          # - "5.16.3"
-          # - "5.14.4"
-          # - "5.12.5"
-          # - "5.10.1"
-    needs: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set Up Perl
-        uses: shogo82148/actions-setup-perl@v1.3.0
-        with:
-          perl-version: ${{ matrix.perl-version }}
-      - run: perl -V
-      - name: install deps using cpanm
-        uses: perl-actions/install-with-cpanm@v1.1
-        with:
-          install: |
-            B::COW
-          sudo: false
-      - name: perl Makefile.PL
-        run: perl Makefile.PL
-      - name: make
-        run: make
-      - name: Run Tests
-        run: make test
-        env:
-          AUTHOR_TESTING: 1
-          RELEASE_TESTING: 1        
-
 
