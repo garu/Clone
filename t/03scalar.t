@@ -7,20 +7,15 @@
 # Change 1..1 below to 1..last_test_to_print .
 # (It may become useful if the test is moved to ./t subdirectory.)
 
-our $can_cow;
-BEGIN {
-    # skip the tests when failing to load B::COW
-    $can_cow = eval { require B::COW; B::COW::can_cow() };
-}
-
 use B q{svref_2object};
+use B::COW;
 
 my $has_data_dumper;
 
 BEGIN {
   $| = 1;
   my $tests = 12;
-  $tests += 2 if $can_cow;
+  $tests += 2 if B::COW::can_cow();
   eval q[use Data::Dumper];
   if (!$@) {
     $has_data_dumper = 1;
@@ -106,7 +101,7 @@ ok( $a != $b, '$a != $b' );
   ok( $c != $d, 'SV are differents SVs' );
 
 
-  if ( $can_cow ) {
+  if ( B::COW::can_cow() ) {
     my $sv_c = svref_2object( $c );
     my $sv_d = svref_2object( $d );
 
