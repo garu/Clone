@@ -5,7 +5,7 @@ WriteMakefile(
     'AUTHOR'        => 'Ray Finch <rdf@cpan.org>',
     'VERSION_FROM'  => 'Clone.pm',
     'ABSTRACT_FROM' => 'Clone.pm',
-    'LICENSE'       => 'perl',
+    'LICENSE'       => 'perl_5',
     'PL_FILES'      => {},
     'TEST_REQUIRES' => {
       'Test::More' => 0,
