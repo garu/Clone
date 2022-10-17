@@ -8,7 +8,7 @@ WriteMakefile(
     'LICENSE'       => 'perl_5',
     'PL_FILES'      => {},
     'TEST_REQUIRES' => {
-      'Test::More' => 0,
+      'Test::More' => '0.88',
       'B::COW'     => '0.004',
     },
     'LIBS'          => [''],     # e.g., '-lm'
