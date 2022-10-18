@@ -11,7 +11,7 @@ our @ISA       = qw(Exporter);
 our @EXPORT;
 our @EXPORT_OK = qw( clone );
 
-our $VERSION = '0.45';
+our $VERSION = '0.46';
 
 XSLoader::load('Clone', $VERSION);
 
@@ -81,7 +81,7 @@ with 3 or fewer levels, while C<dclone()> can be faster for structures
 
 =head1 COPYRIGHT
 
-Copyright 2001-2019 Ray Finch. All Rights Reserved.
+Copyright 2001-2022 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
@@ -90,7 +90,9 @@ modify it under the same terms as Perl itself.
 
 Ray Finch C<< <rdf@cpan.org> >>
 
-Breno G. de Oliveira C<< <garu@cpan.org> >> and
+Breno G. de Oliveira C<< <garu@cpan.org> >>,
+Nicolas Rochelemagne C<< <atoomic@cpan.org> >>
+and
 Florian Ragwitz C<< <rafl@debian.org> >> perform routine maintenance
 releases since 2012.
 
