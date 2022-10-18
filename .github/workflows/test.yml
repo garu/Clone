@@ -25,7 +25,7 @@ jobs:
       PERL_CARTON_PATH: $GITHUB_WORKSPACE/local
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: perl -V
       - name: install deps using cpanm
         uses: perl-actions/install-with-cpanm@v1
@@ -71,7 +71,7 @@ jobs:
       image: perldocker/perl-tester:${{ matrix.perl-version }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: perl -V
       - name: install deps using cpanm
         uses: perl-actions/install-with-cpanm@v1
