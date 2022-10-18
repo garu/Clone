@@ -25,32 +25,13 @@ jobs:
       PERL_CARTON_PATH: $GITHUB_WORKSPACE/local
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: perl -V
-      - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@stable
+      - name: install deps using cpanm
+        uses: perl-actions/install-with-cpanm@v1
         with:
-          install: |
-            B::COW
-      - run: perl Makefile.PL
-      - run: make
-      - run: make test
-
-  no-b-cow:
-    runs-on: ubuntu-latest
-
-    needs: ubuntu-latest
-
-    env:
-      PERL_USE_UNSAFE_INC: 0
-      AUTHOR_TESTING: 1
-      AUTOMATED_TESTING: 1
-      RELEASE_TESTING: 1
-      PERL_CARTON_PATH: $GITHUB_WORKSPACE/local
-
-    steps:
-      - uses: actions/checkout@v2
-      - run: perl -V
+          sudo: false
+          args: --sudo --installdeps .
       - run: perl Makefile.PL
       - run: make
       - run: make test
@@ -90,14 +71,13 @@ jobs:
       image: perldocker/perl-tester:${{ matrix.perl-version }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: perl -V
-      - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@stable
+      - name: install deps using cpanm
+        uses: perl-actions/install-with-cpanm@v1
         with:
-          install: |
-            B::COW
           sudo: false
+          args: -v --installdeps .
       - run: perl Makefile.PL
       - run: make
       - run: make test
