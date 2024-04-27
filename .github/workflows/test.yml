@@ -25,7 +25,7 @@ jobs:
       PERL_CARTON_PATH: $GITHUB_WORKSPACE/local
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpanm
         uses: perl-actions/install-with-cpanm@v1
@@ -36,43 +36,40 @@ jobs:
       - run: make
       - run: make test
 
-#
 ###
 ### linux testing multiple Perl versions
 ###
 
+  perl-versions:
+    runs-on: ubuntu-latest
+    name: List Perl versions
+    outputs:
+      perl-versions: ${{ steps.action.outputs.perl-versions }}
+    steps:
+      - id: action
+        uses: perl-actions/perl-versions@v1
+        with:
+          since-perl: v5.8
+          with-devel: true
+
   linux:
     runs-on: ubuntu-latest
-    name: "perl v${{ matrix.perl-version }}"
+    name: "perl ${{ matrix.perl-version }}"
+
+    needs:
+      - ubuntu-latest
+      - perl-versions
 
     strategy:
       fail-fast: false
       matrix:
-        perl-version:
-          - "5.38"
-          - "5.36"
-          - "5.34"
-          - "5.32"
-          - "5.30"
-          - "5.28"
-          - "5.26"
-          - "5.24"
-          - "5.22"
-          - "5.20"
-          - "5.18"
-          - "5.16"
-          - "5.14"
-          - "5.12"
-          - "5.10"
-          - "5.8"
-
-    needs: ubuntu-latest
+        perl-version: ${{ fromJson (needs.perl-versions.outputs.perl-versions) }}
 
     container:
       image: perldocker/perl-tester:${{ matrix.perl-version }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpanm
         uses: perl-actions/install-with-cpanm@v1
