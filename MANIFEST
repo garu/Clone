@@ -6,6 +6,7 @@ MANIFEST			This list of files
 MANIFEST.SKIP
 ppport.h
 README.md
+t/00-cow.t
 t/01-array.t
 t/02-hash.t
 t/03-scalar.t
@@ -16,7 +17,6 @@ t/07-magic.t
 t/08-fieldhash.t
 t/09-circular.t
 t/10-deep_recursion.t
-t/cow.t
 t/dclone.t
 t/dump.pl
 t/tied.pl

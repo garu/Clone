@@ -1,5 +1,11 @@
 Revision history for Perl module Clone
 
+0.48_01 2025-05-04 18:21:00 garu
+  - Fix memory leak in Clone.xs (fixes #42)
+  - Allow a MAX_DEPTH recursion of 32000 calls (fixes #19 aka RT97525)
+  - Rename tests with more readable names
+  - Remove TODO from cow test
+
 0.47 2024-08-17 12:30:00 atoomic
   - Stop using quote as package separator
 
