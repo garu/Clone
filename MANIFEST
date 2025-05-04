@@ -15,6 +15,7 @@ t/06refcnt.t
 t/07magic.t
 t/08fieldhash.t
 t/09circular.t
+t/10deep_recursion.t
 t/cow.t
 t/dclone.t
 t/dump.pl
