@@ -73,10 +73,10 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth)
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
-  /* The following is a holdover from a very old version */
-  /* possible cause of memory leaks */
-  /* if ( (SvREFCNT(ref) > 1) ) */
-  /*   CLONE_STORE(ref, (SV *)clone); */
+  /* Store the clone in the seen hash before recursing to handle circular refs */
+  if (SvREFCNT(ref) > 1) {
+    CLONE_STORE(ref, (SV *)clone);
+  }
 
   arrlen = av_len (self);
   av_extend (clone, arrlen);
@@ -84,8 +84,12 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth)
   for (i = 0; i <= arrlen; i++)
     {
       svp = av_fetch (self, i, 0);
-      if (svp)
-	av_store (clone, i, sv_clone (*svp, hseen, recur));
+      if (svp) {
+        SV *new_sv = sv_clone(*svp, hseen, recur);
+        if (!av_store(clone, i, new_sv)) {
+          SvREFCNT_dec(new_sv);
+        }
+      }
     }
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
