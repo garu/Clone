@@ -380,6 +380,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth)
             case 't':	/* PERL_MAGIC_taint */
             case '<': /* PERL_MAGIC_backref */
             case '@':  /* PERL_MAGIC_arylen_p */
+            case '~': /* PERL_MAGIC_ext - opaque XS data, not safe to clone (GH #27) */
               continue;
               break;
             case 'P': /* PERL_MAGIC_tied */
