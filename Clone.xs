@@ -68,20 +68,20 @@ av_clone_iterative(SV * ref, HV* hseen)
     AV *self = (AV *)ref;
     SV **seen = NULL;
 
-    // Check if we've already cloned this array
+    /* Check if we've already cloned this array */
     if ((seen = CLONE_FETCH(ref))) {
         return SvREFCNT_inc(*seen);
     }
 
-    // Create new array and store it in seen hash immediately
+    /* Create new array and store it in seen hash immediately */
     AV *clone = newAV();
     CLONE_STORE(ref, (SV *)clone);
 
-    // Special handling for single-element arrays that might be deeply nested
+    /* Special handling for single-element arrays that might be deeply nested */
     if (av_len(self) == 0) {
         SV **elem = av_fetch(self, 0, 0);
         if (elem && SvROK(*elem) && SvTYPE(SvRV(*elem)) == SVt_PVAV) {
-            // Handle deeply nested array structure iteratively
+            /* Handle deeply nested array structure iteratively */
             SV *current = *elem;
             AV *current_av = (AV*)SvRV(current);
 
@@ -92,20 +92,20 @@ av_clone_iterative(SV * ref, HV* hseen)
                 AV *new_av = newAV();
                 av_store(clone, 0, newRV_noinc((SV*)new_av));
 
-                // Get the next element
+                /* Get the next element */
                 SV **next_elem = av_fetch(current_av, 0, 0);
                 if (!next_elem) break;
 
                 current = *next_elem;
                 current_av = SvROK(current) ? (AV*)SvRV(current) : NULL;
 
-                // Store in seen hash to handle circular references
+                /* Store in seen hash to handle circular references */
                 CLONE_STORE(SvRV(*elem), (SV*)new_av);
 
                 clone = new_av;
             }
 
-            // Handle the final element if it exists
+            /* Handle the final element if it exists */
             if (current) {
                 if (SvROK(current)) {
                     av_store(clone, 0, sv_clone(current, hseen, 1));
@@ -114,11 +114,11 @@ av_clone_iterative(SV * ref, HV* hseen)
                 }
             }
         } else if (elem) {
-            // Handle single non-array element
+            /* Handle single non-array element */
             av_store(clone, 0, sv_clone(*elem, hseen, 1));
         }
     } else {
-        // Handle normal array cloning
+        /* Handle normal array cloning */
         I32 arrlen = av_len(self);
         av_extend(clone, arrlen);
 
@@ -139,7 +139,7 @@ av_clone_iterative(SV * ref, HV* hseen)
 static SV *
 av_clone (SV * ref, SV * target, HV* hseen, int depth)
 {
-    // For very deep structures, use the iterative approach
+    /* For very deep structures, use the iterative approach */
     if (depth == 0) {
         return av_clone_iterative(ref, hseen);
     }
@@ -207,13 +207,13 @@ sv_clone (SV * ref, HV* hseen, int depth)
     static int recursion_depth = 0;
     recursion_depth++;
 
-    // Check for deep recursion and switch to iterative mode
+    /* Check for deep recursion and switch to iterative mode */
     if (recursion_depth > MAX_DEPTH) {
         recursion_depth--;
         if (SvTYPE(ref) == SVt_PVAV) {
             return av_clone_iterative(ref, hseen);
         }
-        // For other types, just return a reference to avoid stack overflow
+        /* For other types, just return a reference to avoid stack overflow */
         return SvREFCNT_inc(ref);
     }
 
@@ -416,7 +416,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
             /* let's share the SV for now */
             SvREFCNT_inc((SV*)mg->mg_ptr);
             /* maybe we also want to clone the SV... */
-            //if (mg_ptr) mg->mg_ptr = (char*) sv_clone((SV*)mg->mg_ptr, hseen, -1);
+            /* if (mg_ptr) mg->mg_ptr = (char*) sv_clone((SV*)mg->mg_ptr, hseen, -1); */
           } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
             if (mg->mg_ptr) {
               STRLEN *cache;
