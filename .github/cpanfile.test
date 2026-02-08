@@ -4,6 +4,9 @@ requires 'File::Copy';
 on 'test' => sub {
     requires 'Test::More';
     requires 'B::COW';
+    recommends 'Math::BigInt::GMP';  # for t/11-clone-xs-objects.t (issue #16)
+    recommends 'Math::BigInt';
+    recommends 'Math::BigFloat';
 };
 
 on 'devel' => sub {
