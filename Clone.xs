@@ -23,11 +23,11 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
-static SV *hv_clone (SV *, SV *, HV *, int);
-static SV *av_clone (SV *, SV *, HV *, int);
-static SV *sv_clone (SV *, HV *, int);
-static SV *rv_clone (SV *, HV *, int);
-static SV *av_clone_iterative(SV *, HV *);
+static SV *hv_clone (SV *, SV *, HV *, int, int);
+static SV *av_clone (SV *, SV *, HV *, int, int);
+static SV *sv_clone (SV *, HV *, int, int);
+static SV *rv_clone (SV *, HV *, int, int);
+static SV *av_clone_iterative(SV *, HV *, int);
 
 #ifdef DEBUG_CLONE
 #define TRACEME(a) printf("%s:%d: ",__FUNCTION__, __LINE__) && printf a;
@@ -36,7 +36,7 @@ static SV *av_clone_iterative(SV *, HV *);
 #endif
 
 static SV *
-hv_clone (SV * ref, SV * target, HV* hseen, int depth)
+hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth)
 {
   HV *clone = (HV *) target;
   HV *self = (HV *) ref;
@@ -53,7 +53,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth)
       SV *key = hv_iterkeysv (next);
       TRACEME(("clone item %s\n", SvPV_nolen(key) ));
       hv_store_ent (clone, key,
-                sv_clone (hv_iterval (self, next), hseen, recur), 0);
+                sv_clone (hv_iterval (self, next), hseen, recur, rdepth), 0);
     }
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
@@ -61,7 +61,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth)
 }
 
 static SV *
-av_clone_iterative(SV * ref, HV* hseen)
+av_clone_iterative(SV * ref, HV* hseen, int rdepth)
 {
     if (!ref) return NULL;
 
@@ -108,14 +108,14 @@ av_clone_iterative(SV * ref, HV* hseen)
             /* Handle the final element if it exists */
             if (current) {
                 if (SvROK(current)) {
-                    av_store(clone, 0, sv_clone(current, hseen, 1));
+                    av_store(clone, 0, sv_clone(current, hseen, 1, rdepth));
                 } else {
                     av_store(clone, 0, newSVsv(current));
                 }
             }
         } else if (elem) {
             /* Handle single non-array element */
-            av_store(clone, 0, sv_clone(*elem, hseen, 1));
+            av_store(clone, 0, sv_clone(*elem, hseen, 1, rdepth));
         }
     } else {
         /* Handle normal array cloning */
@@ -125,7 +125,7 @@ av_clone_iterative(SV * ref, HV* hseen)
         for (I32 i = 0; i <= arrlen; i++) {
             SV **svp = av_fetch(self, i, 0);
             if (svp) {
-                SV *new_sv = sv_clone(*svp, hseen, 1);
+                SV *new_sv = sv_clone(*svp, hseen, 1, rdepth);
                 if (!av_store(clone, i, new_sv)) {
                     SvREFCNT_dec(new_sv);
                 }
@@ -137,11 +137,11 @@ av_clone_iterative(SV * ref, HV* hseen)
 }
 
 static SV *
-av_clone (SV * ref, SV * target, HV* hseen, int depth)
+av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth)
 {
     /* For very deep structures, use the iterative approach */
     if (depth == 0) {
-        return av_clone_iterative(ref, hseen);
+        return av_clone_iterative(ref, hseen, rdepth);
     }
 
     AV *clone = (AV *) target;
@@ -154,18 +154,13 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth)
 
     TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
-    /* Store the clone in the seen hash before recursing to handle circular refs */
-    if (SvREFCNT(ref) > 1) {
-        CLONE_STORE(ref, (SV *)clone);
-    }
-
     arrlen = av_len(self);
     av_extend(clone, arrlen);
 
     for (I32 i = 0; i <= arrlen; i++) {
         svp = av_fetch(self, i, 0);
         if (svp) {
-            SV *new_sv = sv_clone(*svp, hseen, recur);
+            SV *new_sv = sv_clone(*svp, hseen, recur, rdepth);
             if (!av_store(clone, i, new_sv)) {
                 SvREFCNT_dec(new_sv);
             }
@@ -177,10 +172,9 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth)
 }
 
 static SV *
-rv_clone (SV * ref, HV* hseen, int depth)
+rv_clone (SV * ref, HV* hseen, int depth, int rdepth)
 {
   SV *clone = NULL;
-  SV *rv = NULL;
 
   assert(SvROK(ref));
 
@@ -191,27 +185,25 @@ rv_clone (SV * ref, HV* hseen, int depth)
 
   if (sv_isobject (ref))
     {
-      clone = newRV_noinc(sv_clone (SvRV(ref), hseen, depth));
+      clone = newRV_noinc(sv_clone (SvRV(ref), hseen, depth, rdepth));
       sv_2mortal (sv_bless (clone, SvSTASH (SvRV (ref))));
     }
   else
-    clone = newRV_inc(sv_clone (SvRV(ref), hseen, depth));
+    clone = newRV_inc(sv_clone (SvRV(ref), hseen, depth, rdepth));
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
   return clone;
 }
 
 static SV *
-sv_clone (SV * ref, HV* hseen, int depth)
+sv_clone (SV * ref, HV* hseen, int depth, int rdepth)
 {
-    static int recursion_depth = 0;
-    recursion_depth++;
+    rdepth++;
 
     /* Check for deep recursion and switch to iterative mode */
-    if (recursion_depth > MAX_DEPTH) {
-        recursion_depth--;
+    if (rdepth > MAX_DEPTH) {
         if (SvTYPE(ref) == SVt_PVAV) {
-            return av_clone_iterative(ref, hseen);
+            return av_clone_iterative(ref, hseen, rdepth);
         }
         /* For other types, just return a reference to avoid stack overflow */
         return SvREFCNT_inc(ref);
@@ -223,7 +215,6 @@ sv_clone (SV * ref, HV* hseen, int depth)
     int magic_ref = 0;
 
     if (!ref) {
-        recursion_depth--;
         return NULL;
     }
 
@@ -243,7 +234,6 @@ sv_clone (SV * ref, HV* hseen, int depth)
   if (visible && (seen = CLONE_FETCH(ref)))
     {
       TRACEME(("fetch ref (0x%x)\n", ref));
-      recursion_depth--;
       return SvREFCNT_inc(*seen);
     }
 
@@ -398,7 +388,7 @@ sv_clone (SV * ref, HV* hseen, int depth)
 	            magic_ref++;
 	      /* fall through */
             default:
-              obj = sv_clone(mg->mg_obj, hseen, -1);
+              obj = sv_clone(mg->mg_obj, hseen, -1, rdepth);
           }
         } else {
           TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
@@ -447,15 +437,15 @@ sv_clone (SV * ref, HV* hseen, int depth)
     ;;
   }
   else if ( SvTYPE(ref) == SVt_PVHV )
-    clone = hv_clone (ref, clone, hseen, depth);
+    clone = hv_clone (ref, clone, hseen, depth, rdepth);
   else if ( SvTYPE(ref) == SVt_PVAV )
-    clone = av_clone (ref, clone, hseen, depth);
+    clone = av_clone (ref, clone, hseen, depth, rdepth);
     /* 3: REFERENCE (inlined for speed) */
   else if (SvROK (ref))
     {
       TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
       SvREFCNT_dec(SvRV(clone));
-      SvRV(clone) = sv_clone (SvRV(ref), hseen, depth); /* Clone the referent */
+      SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth); /* Clone the referent */
       if (sv_isobject (ref))
       {
           sv_bless (clone, SvSTASH (SvRV (ref)));
@@ -466,7 +456,6 @@ sv_clone (SV * ref, HV* hseen, int depth)
     }
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
-  recursion_depth--;
   return clone;
 }
 
@@ -483,7 +472,7 @@ clone(self, depth=-1)
         HV *hseen = newHV();
 	PPCODE:
 	TRACEME(("ref = 0x%x\n", self));
-	clone = sv_clone(self, hseen, depth);
+	clone = sv_clone(self, hseen, depth, 0);
 	hv_clear(hseen);  /* Free HV */
         SvREFCNT_dec((SV *)hseen);
 	EXTEND(SP,1);
