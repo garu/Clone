@@ -17,6 +17,8 @@ t/07-magic.t
 t/08-fieldhash.t
 t/09-circular.t
 t/10-deep_recursion.t
+t/12-memleak.t
+t/13-io-handle.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
