@@ -126,7 +126,7 @@ jobs:
       fail-fast: false
       matrix:
         os-version:
-          - debian:buster
+          - debian:trixie
           - debian:bullseye
           - debian:bookworm
           - ubuntu:20.04
