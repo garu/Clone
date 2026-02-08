@@ -340,6 +340,13 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth)
   if ( visible && ref != clone )
       CLONE_STORE(ref,clone);
 
+    /* If clone == ref (e.g. for PVLV, PVGV, PVCV types), we just
+     * incremented the refcount — skip all internal cloning to avoid
+     * adding duplicate magic entries or corrupting the original SV.
+     * (fixes GH #42: memory leak when cloning non-existent hash values) */
+  if (ref == clone)
+      return clone;
+
     /*
      * We'll assume (in the absence of evidence to the contrary) that A) a
      * tied hash/array doesn't store its elements in the usual way (i.e.
