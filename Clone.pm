@@ -1,10 +1,8 @@
 package Clone;
 
 use strict;
-our $AUTOLOAD;
 
 require Exporter;
-require AutoLoader;
 use XSLoader ();
 
 our @ISA       = qw(Exporter);
@@ -23,8 +21,7 @@ __END__
 Clone - recursively copy Perl datatypes
 
 =for html
-<a href="https://travis-ci.org/garu/Clone"><img src="https://travis-ci.org/garu/Clone.png?branch=master" alt="Build Status"></a>
-<a href="https://coveralls.io/r/garu/Clone?branch=master"><img src="https://coveralls.io/repos/garu/Clone/badge.png?branch=master" alt="Coverage Status"></a>
+<a href="https://github.com/garu/Clone/actions/workflows/test.yml"><img src="https://github.com/garu/Clone/actions/workflows/test.yml/badge.svg" alt="Build Status"></a>
 <a href="https://metacpan.org/pod/Clone"><img src="https://badge.fury.io/pl/Clone.svg" alt="CPAN version"></a>
 
 =head1 SYNOPSIS
@@ -81,7 +78,7 @@ with 3 or fewer levels, while C<dclone()> can be faster for structures
 
 =head1 COPYRIGHT
 
-Copyright 2001-2022 Ray Finch. All Rights Reserved.
+Copyright 2001-2025 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.

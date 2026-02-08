@@ -1,8 +1,7 @@
 Clone - recursively copy Perl datatypes
 =======================================
 
-[![Build Status](https://travis-ci.org/garu/Clone.png?branch=master)](https://travis-ci.org/garu/Clone)
-[![Coverage Status](https://coveralls.io/repos/garu/Clone/badge.png?branch=master)](https://coveralls.io/r/garu/Clone?branch=master)
+[![Build Status](https://github.com/garu/Clone/actions/workflows/test.yml/badge.svg)](https://github.com/garu/Clone/actions/workflows/test.yml)
 [![CPAN version](https://badge.fury.io/pl/Clone.svg)](https://metacpan.org/pod/Clone)
 
 This module provides a `clone()` method which makes recursive
@@ -63,7 +62,7 @@ with 3 or fewer levels, while `dclone()` can be faster for structures
 COPYRIGHT
 ---------
 
-Copyright 2001-2022 Ray Finch. All Rights Reserved.
+Copyright 2001-2025 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.

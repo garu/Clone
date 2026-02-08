@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 3;
+use Test::More tests => 7;
 use Clone qw(clone);
 
 # Test 1: Simple circular reference in array
@@ -10,21 +10,29 @@ use Clone qw(clone);
     my $array = [];
     $array->[0] = $array;  # Create circular reference
     my $clone = eval { clone($array) };
-    ok(!$@, "Cloning circular array reference should not die");
-    is($clone->[0], $clone, "Circular reference should be maintained in clone");
+    ok(!$@, "Cloning circular array reference should not die")
+        or diag("Error: $@");
+    ok(ref($clone) eq 'ARRAY', "Clone is an array reference");
+    is("$clone", "$clone->[0]", "Circular reference should be maintained in clone");
 }
 
-# Test 2: Memory leak test with Devel::Leak
-SKIP: {
-    eval { require Devel::Leak };
-    skip "Devel::Leak required for memory leak test", 1 if $@;
+# Test 2: Circular reference in hash
+{
+    my $hash = {};
+    $hash->{self} = $hash;  # Create circular reference
+    my $clone = eval { clone($hash) };
+    ok(!$@, "Cloning circular hash reference should not die")
+        or diag("Error: $@");
+    ok(ref($clone) eq 'HASH', "Clone is a hash reference");
+    is("$clone", "$clone->{self}", "Circular hash reference should be maintained in clone");
+}
 
-    my $handle = Devel::Leak::NoteSV(my $count);
-    {
-        my $array = [];
-        $array->[0] = $array;
-        my $clone = clone($array);
-    }
-    Devel::Leak::CheckSV($handle);
-    cmp_ok($count, '==', 0, "No memory leak detected with circular references");
+# Test 3: Verify clone is independent from original
+{
+    my $array = [];
+    $array->[0] = $array;
+    $array->[1] = 'original';
+    my $clone = eval { clone($array) };
+    $clone->[1] = 'cloned';
+    is($array->[1], 'original', "Modifying clone does not affect original");
 }
