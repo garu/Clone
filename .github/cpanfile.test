@@ -6,6 +6,7 @@ on 'test' => sub {
     requires 'B::COW';
     recommends 'DBI';
     recommends 'DBD::SQLite';
+    recommends 'Math::BigInt::GMP';
 };
 
 on 'devel' => sub {

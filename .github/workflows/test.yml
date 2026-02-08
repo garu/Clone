@@ -28,6 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: perl -V
+      - name: Install libgmp-dev for Math::BigInt::GMP
+        run: sudo apt-get update && sudo apt-get install -y libgmp-dev
       - name: install deps using cpm
         uses: perl-actions/install-with-cpm@v1
         with:
