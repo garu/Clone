@@ -101,6 +101,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: perl -V
+      - name: Install libgmp-dev for Math::BigInt::GMP
+        run: apt-get update && apt-get install -y libgmp-dev
       - name: install deps using cpanm
         uses: perl-actions/install-with-cpm@v1
         with:
@@ -139,8 +141,8 @@ jobs:
       - name: Install dependencies
         run: |
           (apt-get update &&
-          apt-get install -y perl make gcc sudo curl) ||
-          (yum install --skip-broken -y openssl perl make gcc sudo curl)
+          apt-get install -y perl make gcc sudo curl libgmp-dev) ||
+          (yum install --skip-broken -y openssl perl make gcc sudo curl gmp-devel)
       - run: perl -V
       - name: install deps using cpm
         uses: perl-actions/install-with-cpm@v1
