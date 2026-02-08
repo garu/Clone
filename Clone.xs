@@ -35,6 +35,19 @@ static SV *av_clone_iterative(SV *, HV *, int, AV *);
 #define TRACEME(a)
 #endif
 
+/* Check whether an mg_obj is a threads::shared::tie instance.
+ * The mg_obj is an RV pointing to a blessed PVMG. (GH #18) */
+static int
+is_threads_shared_tie(SV *obj)
+{
+  HV *stash;
+  if (!obj || !SvROK(obj) || !SvOBJECT(SvRV(obj)))
+    return 0;
+  stash = SvSTASH(SvRV(obj));
+  return stash && HvNAME(stash)
+      && strEQ(HvNAME(stash), "threads::shared::tie");
+}
+
 static SV *
 hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
@@ -237,6 +250,28 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       return SvREFCNT_inc(*seen);
     }
 
+  /* threads::shared tiedelem PVLVs are proxies to shared data.
+   * They would normally be returned by SvREFCNT_inc (like other PVLVs),
+   * but that shares the proxy — mutations go back to the shared var.
+   * Copy through magic to get a plain unshared value. (GH #18) */
+  if (SvTYPE(ref) == SVt_PVLV && SvMAGICAL(ref))
+  {
+    MAGIC *mg;
+    for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
+    {
+      if ((mg->mg_type == PERL_MAGIC_tiedelem
+           || mg->mg_type == PERL_MAGIC_tiedscalar)
+          && is_threads_shared_tie(mg->mg_obj))
+      {
+        TRACEME(("threads::shared tiedelem PVLV — copy value\n"));
+        clone = newSVsv(ref);
+        if (visible && ref != clone)
+          CLONE_STORE(ref, clone);
+        return clone;
+      }
+    }
+  }
+
   TRACEME(("switch: (0x%x)\n", ref));
   switch (SvTYPE (ref))
     {
@@ -400,6 +435,15 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
           continue;
         }
 
+        /* threads::shared uses tie magic ('P') with a threads::shared::tie
+         * object, and shared_scalar magic ('n'/'N') for scalars.
+         * Cloning these produces invalid tie objects that crash on access.
+         * Strip the sharing magic so hv_clone/av_clone can iterate through
+         * the tie to read the actual data. (GH #18) */
+        if (mg->mg_type == PERL_MAGIC_shared_scalar
+            || mg->mg_type == PERL_MAGIC_shared)
+          continue;
+
         /* Some mg_obj's can be null, don't bother cloning */
         if ( mg->mg_obj != NULL )
         {
@@ -416,6 +460,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             case 'P': /* PERL_MAGIC_tied */
             case 'p': /* PERL_MAGIC_tiedelem */
             case 'q': /* PERL_MAGIC_tiedscalar */
+              /* threads::shared::tie objects are not real tie objects —
+               * skip them so the clone becomes a plain unshared copy.
+               * The data will be read through the tie during hv_clone/av_clone. */
+              if (is_threads_shared_tie(mg->mg_obj))
+                continue;
 	            magic_ref++;
 	      /* fall through */
             default:

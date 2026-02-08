@@ -5,14 +5,8 @@
 #      (migrated from rt.cpan.org #93821)
 #
 # threads::shared uses tie magic to synchronize shared data.
-# Clone copies the tie binding, producing a clone that tries
-# to FETCH via threads::shared::tie — which crashes because
-# the cloned tie object is not a real shared variable.
-#
-# Expected behavior: either Clone strips the tie (producing
-# a plain unshared copy) or it handles the magic correctly.
-# Current behavior: accessing the clone dies with
-#   "Can't locate object method "FETCH" via package "threads::shared::tie""
+# Clone strips the sharing magic and produces a plain unshared
+# deep copy by reading the values through the tie interface.
 
 use strict;
 use warnings;
@@ -47,40 +41,24 @@ use threads;
 use threads::shared;
 use Clone qw(clone);
 
-# All tests are marked TODO: this is a known bug (GH #18).
-# The tests document the expected behavior once the bug is fixed.
-
 # --- Test 1: Clone a shared hash ---
 
-subtest 'clone a shared hash (GH #18 core reproduction)' => sub {
+subtest 'clone a shared hash' => sub {
     my $shared = shared_clone({ foo => 100, bar => 200 });
 
-    # Verify setup: original works fine
     is($shared->{foo}, 100, 'original shared hash accessible');
     is($shared->{bar}, 200, 'original shared hash bar accessible');
 
-    # This is the bug: clone succeeds but accessing the clone crashes
-    my $cloned = eval { clone($shared) };
-    ok(!$@, 'clone() on shared hash does not die')
-        or diag("clone() died: $@");
+    my $cloned = clone($shared);
 
-    SKIP: {
-        skip 'clone() failed', 3 unless defined $cloned;
+    is(ref($cloned), 'HASH', 'cloned result is a hash reference');
+    is($cloned->{foo}, 100, 'cloned hash value foo correct');
+    is($cloned->{bar}, 200, 'cloned hash value bar correct');
 
-        is(ref($cloned), 'HASH', 'cloned result is a hash reference');
-
-        TODO: {
-            local $TODO = 'GH #18: threads::shared tie magic not handled';
-
-            # This is where the crash happens per the bug report:
-            # "Can't locate object method "FETCH" via package "threads::shared::tie""
-            my $val = eval { $cloned->{foo} };
-            ok(!$@, 'accessing cloned hash does not die')
-                or diag("access died: $@");
-
-            is($val, 100, 'cloned hash value is correct');
-        }
-    }
+    # Clone is independent — mutations do not affect the original
+    $cloned->{foo} = 999;
+    is($shared->{foo}, 100, 'original unchanged after mutating clone');
+    is($cloned->{foo}, 999, 'clone reflects mutation');
 };
 
 # --- Test 2: Clone a shared array ---
@@ -90,23 +68,17 @@ subtest 'clone a shared array' => sub {
 
     is($shared->[0], 10, 'original shared array accessible');
 
-    my $cloned = eval { clone($shared) };
-    ok(!$@, 'clone() on shared array does not die')
-        or diag("clone() died: $@");
+    my $cloned = clone($shared);
 
-    SKIP: {
-        skip 'clone() failed', 2 unless defined $cloned;
+    is(ref($cloned), 'ARRAY', 'cloned result is an array reference');
+    is($cloned->[0], 10, 'cloned array elem 0 correct');
+    is($cloned->[1], 20, 'cloned array elem 1 correct');
+    is($cloned->[2], 30, 'cloned array elem 2 correct');
 
-        is(ref($cloned), 'ARRAY', 'cloned result is an array reference');
-
-        TODO: {
-            local $TODO = 'GH #18: threads::shared tie magic not handled';
-
-            my $val = eval { $cloned->[0] };
-            ok(!$@, 'accessing cloned array does not die')
-                or diag("access died: $@");
-        }
-    }
+    # Clone is independent
+    $cloned->[0] = 999;
+    is($shared->[0], 10, 'original array unchanged after mutating clone');
+    is($cloned->[0], 999, 'clone array reflects mutation');
 };
 
 # --- Test 3: Clone a shared scalar ---
@@ -116,21 +88,14 @@ subtest 'clone a shared scalar ref' => sub {
 
     is($val, 42, 'original shared scalar accessible');
 
-    my $cloned = eval { clone(\$val) };
-    ok(!$@, 'clone() on shared scalar ref does not die')
-        or diag("clone() died: $@");
+    my $cloned = clone(\$val);
 
-    SKIP: {
-        skip 'clone() failed', 1 unless defined $cloned;
+    is(ref($cloned), 'SCALAR', 'cloned result is a scalar reference');
+    is($$cloned, 42, 'cloned scalar value correct');
 
-        TODO: {
-            local $TODO = 'GH #18: threads::shared tie magic not handled';
-
-            my $got = eval { $$cloned };
-            ok(!$@, 'dereferencing cloned scalar does not die')
-                or diag("deref died: $@");
-        }
-    }
+    # Clone is independent
+    $$cloned = 999;
+    is($val, 42, 'original scalar unchanged after mutating clone');
 };
 
 # --- Test 4: Clone a nested shared structure ---
@@ -144,29 +109,20 @@ subtest 'clone a nested shared structure' => sub {
 
     is($shared->{name}, 'test', 'original nested shared accessible');
 
-    my $cloned = eval { clone($shared) };
-    ok(!$@, 'clone() on nested shared structure does not die')
-        or diag("clone() died: $@");
+    my $cloned = clone($shared);
 
-    SKIP: {
-        skip 'clone() failed', 3 unless defined $cloned;
+    is($cloned->{name}, 'test', 'top-level value correct');
+    is($cloned->{values}[1], 2, 'nested array value correct');
+    is($cloned->{nested}{a}, 'deep', 'deeply nested value correct');
 
-        TODO: {
-            local $TODO = 'GH #18: threads::shared tie magic not handled';
+    # Clone is fully independent at every nesting level
+    $cloned->{name} = 'modified';
+    $cloned->{values}[0] = 999;
+    $cloned->{nested}{a} = 'changed';
 
-            my $name = eval { $cloned->{name} };
-            ok(!$@, 'top-level access does not die')
-                or diag("access died: $@");
-
-            my $arr = eval { $cloned->{values}[1] };
-            ok(!$@, 'nested array access does not die')
-                or diag("access died: $@");
-
-            my $deep = eval { $cloned->{nested}{a} };
-            ok(!$@, 'deeply nested access does not die')
-                or diag("access died: $@");
-        }
-    }
+    is($shared->{name}, 'test', 'original name unchanged');
+    is($shared->{values}[0], 1, 'original nested array unchanged');
+    is($shared->{nested}{a}, 'deep', 'original deep hash unchanged');
 };
 
 # --- Test 5: Clone in a thread context ---
@@ -176,17 +132,28 @@ subtest 'clone shared data inside a thread' => sub {
 
     my $thr = threads->create(sub {
         my $cloned = eval { clone($shared) };
-        return { ok => !$@, error => $@ // '' };
+        return {
+            ok    => !$@,
+            error => $@ // '',
+            val   => $cloned ? $cloned->{key} : undef,
+        };
     });
 
     my $result = $thr->join();
 
-    TODO: {
-        local $TODO = 'GH #18: threads::shared tie magic not handled';
+    ok($result->{ok}, 'clone() inside thread does not die')
+        or diag("thread clone died: $result->{error}");
+    is($result->{val}, 'value', 'cloned value correct inside thread');
+};
 
-        ok($result->{ok}, 'clone() inside thread does not die')
-            or diag("thread clone died: $result->{error}");
-    }
+# --- Test 6: Clone is not shared ---
+
+subtest 'clone of shared data is not shared' => sub {
+    my $shared = shared_clone({ x => 1 });
+    my $cloned = clone($shared);
+
+    ok(defined(threads::shared::is_shared($shared)), 'original is shared');
+    ok(!defined(threads::shared::is_shared($cloned)), 'clone is not shared');
 };
 
 done_testing();
