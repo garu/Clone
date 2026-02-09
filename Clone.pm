@@ -78,7 +78,7 @@ with 3 or fewer levels, while C<dclone()> can be faster for structures
 
 =head1 COPYRIGHT
 
-Copyright 2001-2025 Ray Finch. All Rights Reserved.
+Copyright 2001-2026 Ray Finch. All Rights Reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
