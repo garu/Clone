@@ -20,6 +20,7 @@ t/10-deep_recursion.t
 t/12-memleak.t
 t/13-io-handle.t
 t/14-weakened-ref.t
+t/15-clone-xs-objects.t
 t/17-threads-classdbi.t
 t/dclone.t
 t/dump.pl
