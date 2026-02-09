@@ -4,6 +4,8 @@ requires 'File::Copy';
 on 'test' => sub {
     requires 'Test::More';
     requires 'B::COW';
+    recommends 'Class::DBI';
+    recommends 'DBD::SQLite';
 };
 
 on 'devel' => sub {
