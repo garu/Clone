@@ -58,14 +58,18 @@ my %copy = %{ clone (\%hash) };
 
 From CPAN:
 
+```bash
     cpanm Clone
+```
 
 From source:
 
+```bash
     perl Makefile.PL
     make
     make test
     make install
+```
 
 ## See Also
 ## Examples
@@ -188,6 +192,20 @@ Contributions are welcome! Please:
 4. Submit a pull request
 
 ## ## See Also
+## Installation
+
+From CPAN:
+
+    cpanm Clone
+
+From source:
+
+    perl Makefile.PL
+    make
+    make test
+    make install
+
+## See Also
 
 [Storable](https://metacpan.org/pod/Storable)'s `dclone()` is a flexible solution for cloning variables,
 albeit slower for average-sized data structures. Simple
