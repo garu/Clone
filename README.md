@@ -6,6 +6,8 @@ Clone - recursively copy Perl datatypes
 
 ## Synopsis
 
+## Synopsis
+
 ```perl
 use Clone 'clone';
 
@@ -205,7 +207,143 @@ From source:
     make test
     make install
 
-## See Also
+## Examples
+
+### Cloning Blessed Objects
+
+```perl
+    package Person;
+    sub new {
+        my ($class, $name) = @_;
+        bless { name => $name, friends => [] }, $class;
+    }
+
+    package main;
+    use Clone 'clone';
+
+    my $person = Person->new('Alice');
+    my $clone = clone($person);
+
+    # $clone is a separate object with the same data
+    push @{$person->{friends}}, 'Bob';
+    print scalar @{$clone->{friends}};  # 0
+```
+
+### Handling Circular References
+
+Clone properly handles circular references, preventing infinite loops:
+
+```perl
+    my $a = { name => 'A' };
+    my $b = { name => 'B', ref => $a };
+    $a->{ref} = $b;  # circular reference
+
+    my $clone = clone($a);
+    # Circular structure is preserved in the clone
+```
+
+### Cloning Weakened References
+
+```perl
+    use Scalar::Util 'weaken';
+
+    my $obj = { data => 'important' };
+    my $container = { strong => $obj, weak => $obj };
+    weaken($container->{weak});
+
+    my $clone = clone($container);
+    # Both strong and weak references are preserved correctly
+```
+
+### Cloning Tied Variables
+
+```perl
+    use Tie::Hash;
+    tie my %hash, 'Tie::StdHash';
+    %hash = (a => 1, b => 2);
+
+    my $clone = clone(\%hash);
+    # The tied behavior is preserved in the clone
+```
+
+## Installation
+
+From CPAN:
+
+```bash
+    cpanm Clone
+```
+
+From source:
+
+```bash
+    perl Makefile.PL
+    make
+    make test
+    make install
+```
+
+## Limitations
+
+* **Maximum Recursion Depth**: Clone supports structures up to 32,000 levels deep. Deeper structures will cause the clone operation to fail with an error. This limit prevents stack overflow and ensures safe operation.
+
+* **Filehandles and IO Objects**: Filehandles and IO objects are cloned, but the underlying file descriptor is shared. Both the original and cloned filehandle will refer to the same file position. For DBI database handles and similar objects, Clone attempts to handle them safely, but behavior may vary depending on the object type.
+
+* **Code References**: Code references (subroutines) are cloned by reference, not by value. The cloned coderef points to the same subroutine as the original.
+
+* **Thread Safety**: Clone is not explicitly thread-safe. Use appropriate synchronization when cloning data structures across threads.
+
+## Performance
+
+Clone is implemented in C using Perl's XS interface, making it very fast for most use cases.
+
+**When to use Clone:**
+
+Clone is optimized for speed and works best with:
+* Shallow to medium-depth structures (3 levels or fewer)
+* Data structures that need fast cloning in hot code paths
+* Structures containing blessed objects and tied variables
+
+**When to use Storable::dclone:**
+
+[Storable](https://metacpan.org/pod/Storable)'s `dclone()` may be faster for:
+* Very deep structures (4+ levels)
+* When you need serialization features
+
+Benchmarking your specific use case is recommended for performance-critical applications.
+
+## Caveats
+
+* **Cloned objects are deep copies**: Changes to the clone do not affect the original, and vice versa. This includes nested references and objects.
+
+* **Object internals**: While Clone handles most blessed objects correctly, objects with XS components or complex internal state may not clone as expected. Test thoroughly with your specific object types.
+
+* **Memory usage**: Cloning large data structures creates a complete copy in memory. Ensure you have sufficient memory available.
+
+## Testing
+
+Run the test suite:
+
+```bash
+    make test
+```
+
+Or with verbose output:
+
+```bash
+    prove -lv t/
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository on [GitHub](https://github.com/garu/Clone)
+2. Create a feature branch
+3. Make your changes with tests
+4. Submit a pull request
+
+## ## See Also
 
 [Storable](https://metacpan.org/pod/Storable)'s `dclone()` is a flexible solution for cloning variables,
 albeit slower for average-sized data structures. Simple
