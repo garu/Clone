@@ -4,9 +4,9 @@ requires 'File::Copy';
 on 'test' => sub {
     requires 'Test::More';
     requires 'B::COW';
+    recommends 'DBD::SQLite';
     recommends 'DBI';
     recommends 'Class::DBI';    
-    recommends 'DBD::SQLite';
     recommends 'Math::BigInt::GMP';
 };
 
