@@ -1,5 +1,13 @@
 Revision history for Perl module Clone
 
+0.48_02 2026-02-10 22:43:00 atoomic
+  - Fix weakened reference cloning via deferred weakening (fixes #15)
+  - Fix memory leak when cloning non-existent hash values (fixes #42)
+  - Fix segfault when cloning DBI database handles (fixes #27)
+  - Rewrite t/09-circular.t to fix SEGV on CPAN Testers (fixes #54)
+  - Replace static recursion_depth with stack parameter
+  - Fix C++ style comments in Clone.xs for C89 portability
+
 0.48_01 2025-05-04 18:21:00 garu
   - Fix memory leak in Clone.xs (fixes #42)
   - Allow a MAX_DEPTH recursion of 32000 calls (fixes #19 aka RT97525)
