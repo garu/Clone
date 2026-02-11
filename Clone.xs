@@ -76,10 +76,13 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 static SV *
 av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
+    AV *self;
+    AV *clone;
+    SV **seen = NULL;
+
     if (!ref) return NULL;
 
-    AV *self = (AV *)ref;
-    SV **seen = NULL;
+    self = (AV *)ref;
 
     /* Check if we've already cloned this array */
     if ((seen = CLONE_FETCH(ref))) {
@@ -87,7 +90,7 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     }
 
     /* Create new array and store it in seen hash immediately */
-    AV *clone = newAV();
+    clone = newAV();
     CLONE_STORE(ref, (SV *)clone);
 
     /* Special handling for single-element arrays that might be deeply nested */
@@ -103,10 +106,11 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                    av_len((AV*)SvRV(current)) == 0) {
 
                 AV *new_av = newAV();
+                SV **next_elem;
                 av_store(clone, 0, newRV_noinc((SV*)new_av));
 
                 /* Get the next element */
-                SV **next_elem = av_fetch(current_av, 0, 0);
+                next_elem = av_fetch(current_av, 0, 0);
                 if (!next_elem) break;
 
                 current = *next_elem;
@@ -133,9 +137,10 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     } else {
         /* Handle normal array cloning */
         I32 arrlen = av_len(self);
+        I32 i;
         av_extend(clone, arrlen);
 
-        for (I32 i = 0; i <= arrlen; i++) {
+        for (i = 0; i <= arrlen; i++) {
             SV **svp = av_fetch(self, i, 0);
             if (svp) {
                 SV *new_sv = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
@@ -152,16 +157,21 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 static SV *
 av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
+    AV *clone;
+    AV *self;
+    SV **svp;
+    I32 arrlen = 0;
+    I32 i;
+    int recur;
+
     /* For very deep structures, use the iterative approach */
     if (depth == 0) {
         return av_clone_iterative(ref, hseen, rdepth, weakrefs);
     }
 
-    AV *clone = (AV *) target;
-    AV *self = (AV *) ref;
-    SV **svp;
-    I32 arrlen = 0;
-    int recur = depth > 0 ? depth - 1 : -1;
+    clone = (AV *) target;
+    self = (AV *) ref;
+    recur = depth > 0 ? depth - 1 : -1;
 
     assert(SvTYPE(ref) == SVt_PVAV);
 
@@ -170,7 +180,7 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
     arrlen = av_len(self);
     av_extend(clone, arrlen);
 
-    for (I32 i = 0; i <= arrlen; i++) {
+    for (i = 0; i <= arrlen; i++) {
         svp = av_fetch(self, i, 0);
         if (svp) {
             SV *new_sv = sv_clone(*svp, hseen, recur, rdepth, weakrefs);
@@ -211,6 +221,11 @@ rv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 static SV *
 sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
+    SV *clone;
+    SV **seen = NULL;
+    UV visible;
+    int magic_ref = 0;
+
     rdepth++;
 
     /* Check for deep recursion and switch to iterative mode */
@@ -222,10 +237,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         return SvREFCNT_inc(ref);
     }
 
-    SV *clone = ref;
-    SV **seen = NULL;
-    UV visible;
-    int magic_ref = 0;
+    clone = ref;
 
     if (!ref) {
         return NULL;
