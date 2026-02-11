@@ -23,6 +23,8 @@ t/14-weakened-ref.t
 t/15-clone-xs-objects.t
 t/16-threads-shared.t
 t/17-threads-classdbi.t
+t/18-overload.t
+t/19-dualvar.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
