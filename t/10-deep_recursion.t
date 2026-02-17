@@ -2,69 +2,92 @@
 
 use strict;
 use warnings;
-use Test::More;
+use Test::More tests => 7;
 use Clone qw(clone);
 
-BEGIN {
-    eval "use Devel::Peek";
-    plan skip_all => "Devel::Peek required for testing deep recursion implementation" if $@;
-
-    eval "use Devel::Size";
-    plan skip_all => "Devel::Size required for testing deep recursion implementation" if $@;
-}
-
-plan tests => 5;
-
-# Test 1: Basic deep recursion test with verification
+# Test 1-2: Basic deep recursion (1000 levels)
 {
     my $deep = [];
-    $deep = [$deep] for 1..1000;  # Create a deeply nested structure
+    my $curr = $deep;
+    for (1..1000) {
+        my $next = [];
+        $curr->[0] = $next;
+        $curr = $next;
+    }
+
     my $cloned = eval { clone($deep) };
     ok(!$@, "Cloning deeply nested structure (1000 levels) should not die")
         or diag("Error: $@");
     is(ref($cloned), 'ARRAY', "Cloned structure should be an array reference");
 }
 
-# Test 2: Very deep recursion test with verification
+# Test 3-5: Very deep recursion that exceeds MAX_DEPTH (35000 levels)
 {
-    # Create a structure that will definitely hit the recursion limit
-    my $recursion_limit = 50000;  # This should hit the limit on most systems
+    my $depth_target = 35000;
     my $very_deep = [];
-    my $original = $very_deep;
-
-    # Force Perl to actually create the deep structure
     my $curr = $very_deep;
-    for (1..$recursion_limit) {
-        my $new = [];
-        $curr->[0] = $new;
-        $curr = $new;
+    for (1..$depth_target) {
+        my $next = [];
+        $curr->[0] = $next;
+        $curr = $next;
     }
 
-    # Get the size of the original structure
-    my $orig_size = eval { Devel::Size::total_size($very_deep) };
-    ok(defined($orig_size), "Should be able to measure original structure size")
-        or diag("Error measuring size: $@");
-
-    # Now try to clone it
     my $cloned = eval {
-        local $SIG{__WARN__} = sub {}; # Suppress warnings
+        local $SIG{__WARN__} = sub {};
         clone($very_deep);
     };
 
-    ok(!$@ && defined($cloned), "Should be able to clone deep structure without stack overflow")
+    ok(!$@ && defined($cloned),
+       "Should be able to clone $depth_target-deep structure without stack overflow")
         or diag("Error during clone: " . ($@ || "undefined result"));
 
-    # If we got this far and the clone succeeded, verify the structure
     SKIP: {
-        skip "Clone failed, can't verify structure", 1 if !defined $cloned;
+        skip "Clone failed, can't verify structure", 2 if !defined $cloned;
 
-        my $depth = 0;
-        my $curr = $cloned;
-        while (ref($curr) eq 'ARRAY' && @$curr == 1) {
-            $curr = $curr->[0];
-            $depth++;
+        # Measure cloned depth
+        my $measured = 0;
+        my $walk = $cloned;
+        while (ref($walk) eq 'ARRAY' && @$walk == 1) {
+            $walk = $walk->[0];
+            $measured++;
         }
 
-        is($depth, $recursion_limit, "Cloned structure should maintain full depth");
+        is($measured, $depth_target,
+           "Cloned structure should maintain full depth ($depth_target levels)");
+
+        # Verify clone independence: mutating the clone must not affect original
+        $cloned->[0] = "mutated";
+        is(ref($very_deep->[0]), 'ARRAY',
+           "Mutating clone should not affect original (clone independence)");
+    }
+}
+
+# Test 6-7: Deep recursion with multi-element arrays at leaves
+{
+    my $deep = [];
+    my $curr = $deep;
+    for (1..1000) {
+        my $next = [];
+        $curr->[0] = $next;
+        $curr = $next;
+    }
+    # Put multi-element array at the leaf
+    $curr->[0] = "leaf_a";
+    $curr->[1] = "leaf_b";
+
+    my $cloned = eval { clone($deep) };
+    ok(!$@, "Cloning deep structure with multi-element leaf should not die")
+        or diag("Error: $@");
+
+    SKIP: {
+        skip "Clone failed", 1 if !defined $cloned;
+
+        # Walk to the leaf
+        my $walk = $cloned;
+        while (ref($walk) eq 'ARRAY' && @$walk == 1) {
+            $walk = $walk->[0];
+        }
+        is_deeply($walk, ["leaf_a", "leaf_b"],
+                  "Leaf multi-element array should be cloned correctly");
     }
 }

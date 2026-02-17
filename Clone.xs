@@ -6,7 +6,18 @@
 #include "ppport.h"
 
 #define CLONE_KEY(x) ((char *) &x)
-#define MAX_DEPTH 32000  /* Maximum safe recursion depth */
+
+/* Maximum safe recursion depth before switching to iterative mode.
+ * Each nesting level of [[[...]]] consumes ~3 C stack frames in the
+ * recursive clone path.  The rdepth counter increments once per
+ * sv_clone() call, so the nesting level is roughly rdepth/2.
+ * On Windows the default thread stack is 1 MB; on Linux/macOS it is
+ * typically 8 MB.  Use a conservative limit that is safe everywhere. */
+#ifdef _WIN32
+#define MAX_DEPTH 4000
+#else
+#define MAX_DEPTH 32000
+#endif
 
 #define CLONE_STORE(x,y)						\
 do {									\
@@ -77,8 +88,13 @@ static SV *
 av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
     AV *self;
-    AV *clone;
+    AV *root_clone;
+    AV *tail;
+    SV *current_ref;
     SV **seen = NULL;
+    SV **svp;
+    I32 arrlen;
+    I32 i;
 
     if (!ref) return NULL;
 
@@ -90,68 +106,77 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     }
 
     /* Create new array and store it in seen hash immediately */
-    clone = newAV();
-    CLONE_STORE(ref, (SV *)clone);
+    root_clone = newAV();
+    CLONE_STORE(ref, (SV *)root_clone);
 
-    /* Special handling for single-element arrays that might be deeply nested */
+    /* Optimized path for deeply nested single-element arrays:
+     * [[[...]]] chains are unrolled iteratively to avoid stack overflow.
+     * Each nesting level is an AV with one element (an RV to the next AV). */
     if (av_len(self) == 0) {
-        SV **elem = av_fetch(self, 0, 0);
-        if (elem && SvROK(*elem) && SvTYPE(SvRV(*elem)) == SVt_PVAV) {
-            /* Handle deeply nested array structure iteratively */
-            SV *current = *elem;
-            AV *current_av = (AV*)SvRV(current);
+        svp = av_fetch(self, 0, 0);
+        if (svp && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVAV) {
+            tail = root_clone;
+            current_ref = *svp;
 
-            while (current && SvROK(current) &&
-                   SvTYPE(SvRV(current)) == SVt_PVAV &&
-                   av_len((AV*)SvRV(current)) == 0) {
-
+            /* Walk the chain: each step creates one AV and one RV link */
+            while (current_ref && SvROK(current_ref) &&
+                   SvTYPE(SvRV(current_ref)) == SVt_PVAV &&
+                   av_len((AV*)SvRV(current_ref)) == 0) {
                 AV *new_av = newAV();
-                SV **next_elem;
-                av_store(clone, 0, newRV_noinc((SV*)new_av));
+                SV *inner_sv = SvRV(current_ref);
 
-                /* Get the next element */
-                next_elem = av_fetch(current_av, 0, 0);
-                if (!next_elem) break;
+                av_store(tail, 0, newRV_noinc((SV*)new_av));
+                CLONE_STORE(inner_sv, (SV*)new_av);
 
-                current = *next_elem;
-                current_av = SvROK(current) ? (AV*)SvRV(current) : NULL;
-
-                /* Store in seen hash to handle circular references */
-                CLONE_STORE(SvRV(*elem), (SV*)new_av);
-
-                clone = new_av;
+                /* Advance to the next element in the chain */
+                svp = av_fetch((AV*)inner_sv, 0, 0);
+                if (!svp) break;
+                current_ref = *svp;
+                tail = new_av;
             }
 
-            /* Handle the final element if it exists */
-            if (current) {
-                if (SvROK(current)) {
-                    av_store(clone, 0, sv_clone(current, hseen, 1, rdepth, weakrefs));
+            /* Handle the final element (leaf or non-matching structure) */
+            if (current_ref) {
+                if (SvROK(current_ref) &&
+                    SvTYPE(SvRV(current_ref)) == SVt_PVAV) {
+                    /* Final AV — clone it iteratively too */
+                    SV *leaf = av_clone_iterative(SvRV(current_ref),
+                                                  hseen, rdepth, weakrefs);
+                    av_store(tail, 0, newRV_noinc(leaf));
+                } else if (SvROK(current_ref)) {
+                    av_store(tail, 0,
+                             sv_clone(current_ref, hseen, 1, rdepth, weakrefs));
                 } else {
-                    av_store(clone, 0, newSVsv(current));
+                    av_store(tail, 0, newSVsv(current_ref));
                 }
             }
-        } else if (elem) {
-            /* Handle single non-array element */
-            av_store(clone, 0, sv_clone(*elem, hseen, 1, rdepth, weakrefs));
-        }
-    } else {
-        /* Handle normal array cloning */
-        I32 arrlen = av_len(self);
-        I32 i;
-        av_extend(clone, arrlen);
 
-        for (i = 0; i <= arrlen; i++) {
-            SV **svp = av_fetch(self, i, 0);
-            if (svp) {
-                SV *new_sv = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
-                if (!av_store(clone, i, new_sv)) {
-                    SvREFCNT_dec(new_sv);
-                }
+            return (SV*)root_clone;
+        }
+
+        /* Single non-array element */
+        if (svp) {
+            av_store(root_clone, 0,
+                     sv_clone(*svp, hseen, 1, rdepth, weakrefs));
+        }
+        return (SV*)root_clone;
+    }
+
+    /* General case: array with multiple elements */
+    arrlen = av_len(self);
+    av_extend(root_clone, arrlen);
+
+    for (i = 0; i <= arrlen; i++) {
+        svp = av_fetch(self, i, 0);
+        if (svp) {
+            SV *new_sv = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
+            if (!av_store(root_clone, i, new_sv)) {
+                SvREFCNT_dec(new_sv);
             }
         }
     }
 
-    return (SV*)clone;
+    return (SV*)root_clone;
 }
 
 static SV *
@@ -228,10 +253,23 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
     rdepth++;
 
-    /* Check for deep recursion and switch to iterative mode */
+    /* Check for deep recursion and switch to iterative mode.
+     * A deeply nested arrayref like [[[...]]] alternates between RV and AV
+     * at each level, consuming ~3 C stack frames per nesting level.
+     * On Windows (1MB default stack), this overflows around depth 2000.
+     * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
     if (rdepth > MAX_DEPTH) {
         if (SvTYPE(ref) == SVt_PVAV) {
             return av_clone_iterative(ref, hseen, rdepth, weakrefs);
+        }
+        /* For RVs pointing to AVs, follow the reference and use the
+         * iterative path — this is the common case for [[[...]]] */
+        if (SvROK(ref) && SvTYPE(SvRV(ref)) == SVt_PVAV) {
+            SV *clone_av = av_clone_iterative(SvRV(ref), hseen, rdepth, weakrefs);
+            SV *clone_rv = newRV_noinc(clone_av);
+            if (sv_isobject(ref))
+                sv_bless(clone_rv, SvSTASH(SvRV(ref)));
+            return clone_rv;
         }
         /* For other types, just return a reference to avoid stack overflow */
         return SvREFCNT_inc(ref);
