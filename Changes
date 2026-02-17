@@ -1,5 +1,9 @@
 Revision history for Perl module Clone
 
+0.48_04 2026-02-17 22:47:00 atoomic
+  - Fix C89 declaration-after-statement violations in Clone.xs
+  - Fix deep recursion stack overflow on Windows
+
 0.48_03 2026-02-10 22:59:00 atoomic
   - Fix cloning of Math::BigInt::GMP objects (fixes #16)
   - Fix cloning of threads::shared data structures (fixes #18)
