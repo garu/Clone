@@ -44,7 +44,6 @@ do {									\
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
-static SV *rv_clone (SV *, HV *, int, int, AV *);
 static SV *av_clone_iterative(SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
@@ -78,13 +77,22 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
+  /* Pre-size the target hash to avoid incremental resizing */
+  if (HvKEYS(self) > 0)
+    hv_ksplit(clone, HvKEYS(self));
+
   hv_iterinit (self);
   while ((next = hv_iternext (self)))
     {
-      SV *key = hv_iterkeysv (next);
-      TRACEME(("clone item %s\n", SvPV_nolen(key) ));
-      hv_store_ent (clone, key,
-                sv_clone (hv_iterval (self, next), hseen, recur, rdepth, weakrefs), 0);
+      I32 klen;
+      char *kpv = hv_iterkey(next, &klen);
+      SV *val = sv_clone(hv_iterval(self, next), hseen, recur, rdepth, weakrefs);
+      /* Use hv_iterkey + HeHASH to avoid allocating a mortal SV per key.
+       * Negate klen for UTF-8 keys per Perl API convention. */
+      if (HeKUTF8(next))
+        klen = -klen;
+      TRACEME(("clone item %.*s\n", (int)(klen > 0 ? klen : -klen), kpv));
+      hv_store(clone, kpv, klen, val, HeHASH(next));
     }
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
@@ -173,14 +181,15 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     arrlen = av_len(self);
     av_extend(root_clone, arrlen);
 
-    for (i = 0; i <= arrlen; i++) {
-        svp = av_fetch(self, i, 0);
-        if (svp) {
-            SV *new_sv = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
-            if (!av_store(root_clone, i, new_sv)) {
-                SvREFCNT_dec(new_sv);
+    {
+        SV **dst = AvARRAY(root_clone);
+        for (i = 0; i <= arrlen; i++) {
+            svp = av_fetch(self, i, 0);
+            if (svp) {
+                dst[i] = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
             }
         }
+        AvFILLp(root_clone) = arrlen;
     }
 
     return (SV*)root_clone;
@@ -192,6 +201,7 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
     AV *clone;
     AV *self;
     SV **svp;
+    SV **dst;
     I32 arrlen = 0;
     I32 i;
     int recur;
@@ -212,42 +222,19 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
     arrlen = av_len(self);
     av_extend(clone, arrlen);
 
+    /* Use av_fetch on the source (may be magical/tied) but write
+     * directly to the target's AvARRAY (we just created it, no magic). */
+    dst = AvARRAY(clone);
     for (i = 0; i <= arrlen; i++) {
         svp = av_fetch(self, i, 0);
         if (svp) {
-            SV *new_sv = sv_clone(*svp, hseen, recur, rdepth, weakrefs);
-            if (!av_store(clone, i, new_sv)) {
-                SvREFCNT_dec(new_sv);
-            }
+            dst[i] = sv_clone(*svp, hseen, recur, rdepth, weakrefs);
         }
     }
+    AvFILLp(clone) = arrlen;
 
     TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
     return (SV *) clone;
-}
-
-static SV *
-rv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
-{
-  SV *clone = NULL;
-
-  assert(SvROK(ref));
-
-  TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
-
-  if (!SvROK (ref))
-    return NULL;
-
-  if (sv_isobject (ref))
-    {
-      clone = newRV_noinc(sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs));
-      sv_2mortal (sv_bless (clone, SvSTASH (SvRV (ref))));
-    }
-  else
-    clone = newRV_inc(sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs));
-
-  TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
-  return clone;
 }
 
 static SV *
@@ -257,6 +244,9 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     SV **seen = NULL;
     UV visible;
     int magic_ref = 0;
+
+    if (!ref)
+        return NULL;
 
     rdepth++;
 
@@ -270,11 +260,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             return av_clone_iterative(ref, hseen, rdepth, weakrefs);
         }
         /* For RVs pointing to AVs, follow the reference and use the
-         * iterative path — this is the common case for [[[...]]] */
+         * iterative path -- this is the common case for [[[...]]] */
         if (SvROK(ref) && SvTYPE(SvRV(ref)) == SVt_PVAV) {
             SV *clone_av = av_clone_iterative(SvRV(ref), hseen, rdepth, weakrefs);
             SV *clone_rv = newRV_noinc(clone_av);
-            if (sv_isobject(ref))
+            if (SvOBJECT(SvRV(ref)))
                 sv_bless(clone_rv, SvSTASH(SvRV(ref)));
             return clone_rv;
         }
@@ -283,10 +273,6 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     }
 
     clone = ref;
-
-    if (!ref) {
-        return NULL;
-    }
 
 #if PERL_REVISION >= 5 && PERL_VERSION > 8
   /* This is a hack for perl 5.9.*, save everything */
@@ -370,11 +356,9 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             SvPV_set(clone, SvPVX(ref) );
             CowREFCNT(ref)++;
 
-            /* preserve cur, len, flags and utf8 flag */
+            /* preserve cur, len, and value-relevant flags */
             SvCUR_set(clone, SvCUR(ref));
             SvLEN_set(clone, SvLEN(ref));
-            SvFLAGS(clone) = SvFLAGS(ref); /* preserve all the flags from the original SV */
-
             if (SvUTF8(ref))
               SvUTF8_on(clone);
           } else {
@@ -460,12 +444,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
   if (SvMAGICAL(ref) )
     {
       MAGIC* mg;
+      int has_qr = 0;
 
       for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
       {
         SV *obj = (SV *) NULL;
-	/* we don't want to clone a qr (regexp) object */
-	/* there are probably other types as well ...  */
         TRACEME(("magic type: %c\n", mg->mg_type));
 
         /* PERL_MAGIC_ext: opaque XS data, handle before the mg_obj check
@@ -510,6 +493,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
           {
             case 'r':	/* PERL_MAGIC_qr  */
               obj = mg->mg_obj;
+              has_qr = 1;
               break;
             case 't':	/* PERL_MAGIC_taint */
             case '<': /* PERL_MAGIC_backref */
@@ -519,7 +503,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             case 'P': /* PERL_MAGIC_tied */
             case 'p': /* PERL_MAGIC_tiedelem */
             case 'q': /* PERL_MAGIC_tiedscalar */
-              /* threads::shared::tie objects are not real tie objects —
+              /* threads::shared::tie objects are not real tie objects --
                * skip them so the clone becomes a plain unshared copy.
                * The data will be read through the tie during hv_clone/av_clone. */
               if (is_threads_shared_tie(mg->mg_obj))
@@ -538,18 +522,17 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
           if (mg->mg_len >= 0) { /* copy the pv */
             if (mg_ptr) {
-              Newxz(mg_ptr, mg->mg_len+1, char); /* add +1 for the NULL at the end? */
+              Newx(mg_ptr, mg->mg_len+1, char);
               Copy(mg->mg_ptr, mg_ptr, mg->mg_len, char);
+              mg_ptr[mg->mg_len] = '\0';
             }
           } else if (mg->mg_len == HEf_SVKEY) {
             /* let's share the SV for now */
             SvREFCNT_inc((SV*)mg->mg_ptr);
-            /* maybe we also want to clone the SV... */
-            /* if (mg_ptr) mg->mg_ptr = (char*) sv_clone((SV*)mg->mg_ptr, hseen, -1); */
           } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
             if (mg->mg_ptr) {
               STRLEN *cache;
-              Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+              Newx(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
               mg_ptr = (char *) cache;
               Copy(mg->mg_ptr, mg_ptr, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
             }
@@ -557,7 +540,6 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             croak("Unsupported magic_ptr clone");
           }
 
-          /* this is plain old magic, so do the same thing */
           sv_magic(clone,
                    obj,
                    mg->mg_type,
@@ -566,8 +548,8 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
         }
       }
-      /* major kludge - why does the vtable for a qr type need to be null? */
-      if ( (mg = mg_find(clone, 'r')) )
+      /* Null the qr vtable -- avoid mg_find traversal if we already know */
+      if (has_qr && (mg = mg_find(clone, 'r')))
         mg->mg_virtual = (MGVTBL *) NULL;
     }
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
@@ -585,7 +567,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
       SvREFCNT_dec(SvRV(clone));
       SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
-      if (sv_isobject (ref))
+      if (SvOBJECT(SvRV(ref)))
       {
           sv_bless (clone, SvSTASH (SvRV (ref)));
       }
