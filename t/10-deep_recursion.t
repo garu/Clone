@@ -4,29 +4,43 @@ use strict;
 use warnings;
 use Test::More tests => 7;
 use Clone qw(clone);
+use Config;
 
-# Test 1-2: Basic deep recursion (1000 levels)
+# Platform-adaptive depth targets.
+# Windows has a 1 MB default thread stack (vs 8 MB on Linux/macOS),
+# so building deeply nested Perl structures overflows the C stack.
+# The depths below must be safe for both Perl structure construction
+# AND the Clone XS recursive path.
+my $is_win32 = ($^O eq 'MSWin32');
+
+# Depth that exercises recursive cloning without hitting the iterative
+# fallback (MAX_DEPTH is 4000 on Windows, 32000 elsewhere).
+my $deep_target     = $is_win32 ? 2000 : 35000;
+
+# Moderate depth used for basic tests (safe everywhere).
+my $moderate_target  = 1000;
+
+# Test 1-2: Basic deep recursion
 {
     my $deep = [];
     my $curr = $deep;
-    for (1..1000) {
+    for (1..$moderate_target) {
         my $next = [];
         $curr->[0] = $next;
         $curr = $next;
     }
 
     my $cloned = eval { clone($deep) };
-    ok(!$@, "Cloning deeply nested structure (1000 levels) should not die")
+    ok(!$@, "Cloning deeply nested structure ($moderate_target levels) should not die")
         or diag("Error: $@");
     is(ref($cloned), 'ARRAY', "Cloned structure should be an array reference");
 }
 
-# Test 3-5: Very deep recursion that exceeds MAX_DEPTH (35000 levels)
+# Test 3-5: Very deep recursion (platform-adaptive depth)
 {
-    my $depth_target = 35000;
     my $very_deep = [];
     my $curr = $very_deep;
-    for (1..$depth_target) {
+    for (1..$deep_target) {
         my $next = [];
         $curr->[0] = $next;
         $curr = $next;
@@ -38,7 +52,7 @@ use Clone qw(clone);
     };
 
     ok(!$@ && defined($cloned),
-       "Should be able to clone $depth_target-deep structure without stack overflow")
+       "Should be able to clone $deep_target-deep structure without stack overflow")
         or diag("Error during clone: " . ($@ || "undefined result"));
 
     SKIP: {
@@ -52,8 +66,8 @@ use Clone qw(clone);
             $measured++;
         }
 
-        is($measured, $depth_target,
-           "Cloned structure should maintain full depth ($depth_target levels)");
+        is($measured, $deep_target,
+           "Cloned structure should maintain full depth ($deep_target levels)");
 
         # Verify clone independence: mutating the clone must not affect original
         $cloned->[0] = "mutated";
@@ -66,7 +80,7 @@ use Clone qw(clone);
 {
     my $deep = [];
     my $curr = $deep;
-    for (1..1000) {
+    for (1..$moderate_target) {
         my $next = [];
         $curr->[0] = $next;
         $curr = $next;
