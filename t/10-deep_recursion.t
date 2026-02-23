@@ -7,15 +7,16 @@ use Clone qw(clone);
 use Config;
 
 # Platform-adaptive depth targets.
-# Windows has a 1 MB default thread stack (vs 8 MB on Linux/macOS),
-# so building deeply nested Perl structures overflows the C stack.
-# The depths below must be safe for both Perl structure construction
-# AND the Clone XS recursive path.
-my $is_win32 = ($^O eq 'MSWin32');
+# Windows has a 1 MB default thread stack; Cygwin typically 2 MB;
+# Linux/macOS default to 8 MB.  The depths must be safe for both
+# Perl structure construction AND the Clone XS recursive path.
+#
+# Clone.xs uses MAX_DEPTH to switch from recursive to iterative
+# cloning: 2000 on Windows/Cygwin, 32000 elsewhere.
+# The deep target must EXCEED MAX_DEPTH to exercise both paths.
+my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
-# Depth that exercises recursive cloning without hitting the iterative
-# fallback (MAX_DEPTH is 4000 on Windows, 32000 elsewhere).
-my $deep_target     = $is_win32 ? 2000 : 35000;
+my $deep_target     = $is_limited_stack ? 4000 : 35000;
 
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
