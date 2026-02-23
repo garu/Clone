@@ -1,5 +1,8 @@
 Revision history for Perl module Clone
 
+0.48_05 2026-02-22 20:36:00 atoomic
+  - fix: use platform-adaptive depth in t/10-deep_recursion.t for Windows
+
 0.48_04 2026-02-17 22:47:00 atoomic
   - Fix C89 declaration-after-statement violations in Clone.xs
   - Fix deep recursion stack overflow on Windows
