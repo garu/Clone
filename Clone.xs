@@ -14,15 +14,16 @@
  * nesting level is roughly rdepth/2, using ~450 bytes of stack each.
  *
  * Windows has a 1 MB default thread stack; Cygwin typically 2 MB.
- * Linux/macOS default to 8 MB.  MAX_DEPTH must be low enough that
- * (MAX_DEPTH/2) * ~450 bytes fits within the available stack.
+ * Linux/macOS default to 8 MB but some CPAN smokers and containers
+ * may have 4 MB or less available after Perl/harness overhead.
  *
  * MAX_DEPTH=2000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
- * MAX_DEPTH=32000 elsewhere -> ~16000 nesting levels -> ~7.2 MB. */
+ * MAX_DEPTH=4000 elsewhere        -> ~2000 nesting levels -> ~900 KB.
+ * (GH #77: 32000 was too aggressive — caused SEGV on CPAN smokers.) */
 #if defined(_WIN32) || defined(__CYGWIN__)
 #define MAX_DEPTH 2000
 #else
-#define MAX_DEPTH 32000
+#define MAX_DEPTH 4000
 #endif
 
 #define CLONE_STORE(x,y)						\
