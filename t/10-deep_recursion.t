@@ -8,15 +8,18 @@ use Config;
 
 # Platform-adaptive depth targets.
 # Windows has a 1 MB default thread stack; Cygwin typically 2 MB;
-# Linux/macOS default to 8 MB.  The depths must be safe for both
-# Perl structure construction AND the Clone XS recursive path.
+# Linux/macOS default to 8 MB but some smokers have less.
+# The depths must be safe for both Clone XS recursion AND Perl's
+# own recursive SvREFCNT_dec when freeing deeply nested structures.
 #
-# Clone.xs uses MAX_DEPTH to switch from recursive to iterative
-# cloning: 2000 on Windows/Cygwin, 32000 elsewhere.
-# The deep target must EXCEED MAX_DEPTH to exercise both paths.
+# Clone.xs uses MAX_DEPTH (in rdepth units) to switch from recursive
+# to iterative cloning: 2000 on Windows/Cygwin, 4000 elsewhere.
+# rdepth increments twice per nesting level (once for AV, once for RV),
+# so the switch happens at roughly MAX_DEPTH/2 nesting levels.
+# The deep target must exceed MAX_DEPTH/2 to exercise both paths.
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
-my $deep_target     = $is_limited_stack ? 4000 : 35000;
+my $deep_target     = $is_limited_stack ? 4000 : 5000;
 
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
