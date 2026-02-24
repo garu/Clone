@@ -1,5 +1,11 @@
 Revision history for Perl module Clone
 
+0.48_07 2026-02-24 07:26:00 atoomic
+  - perf: optimize hot paths in Clone.xs
+  - fix: replace subtest with SKIP/bare blocks to avoid Test2 warnings
+  - fix: don't require MGf_DUP flag for ext magic duplication
+  - fix: lower MAX_DEPTH to 4000 to prevent SEGV on CPAN smokers
+
 0.48_06 2026-02-22 20:36:00 atoomic
   - fix: use platform-adaptive depth in t/10-deep_recursion.t for Windows
 
