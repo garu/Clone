@@ -475,9 +475,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 #if defined(MGf_DUP) && defined(sv_magicext)
           /* If the ext magic has a dup callback (e.g. Math::BigInt::GMP),
            * clone it properly via sv_magicext + svt_dup.
-           * Otherwise skip it (e.g. DBI handles have no dup). */
-          if (mg->mg_virtual && mg->mg_virtual->svt_dup
-              && (mg->mg_flags & MGf_DUP))
+           * Otherwise skip it (e.g. DBI handles have no dup).
+           * Note: we check only for svt_dup presence, not MGf_DUP flag,
+           * because some older XS modules (e.g. Math::BigInt::GMP on
+           * Perl 5.22) provide svt_dup without setting MGf_DUP. (GH #76) */
+          if (mg->mg_virtual && mg->mg_virtual->svt_dup)
           {
             MAGIC *new_mg;
             new_mg = sv_magicext(clone, mg->mg_obj,
