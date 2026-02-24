@@ -7,6 +7,9 @@
 # threads::shared uses tie magic to synchronize shared data.
 # Clone strips the sharing magic and produces a plain unshared
 # deep copy by reading the values through the tie interface.
+#
+# NOTE: uses bare blocks instead of subtest to avoid Test2::API::Context
+# global destruction warnings on older Perls (GH #78).
 
 use strict;
 use warnings;
@@ -43,7 +46,7 @@ use Clone qw(clone);
 
 # --- Test 1: Clone a shared hash ---
 
-subtest 'clone a shared hash' => sub {
+{
     my $shared = shared_clone({ foo => 100, bar => 200 });
 
     is($shared->{foo}, 100, 'original shared hash accessible');
@@ -59,11 +62,11 @@ subtest 'clone a shared hash' => sub {
     $cloned->{foo} = 999;
     is($shared->{foo}, 100, 'original unchanged after mutating clone');
     is($cloned->{foo}, 999, 'clone reflects mutation');
-};
+}
 
 # --- Test 2: Clone a shared array ---
 
-subtest 'clone a shared array' => sub {
+{
     my $shared = shared_clone([10, 20, 30]);
 
     is($shared->[0], 10, 'original shared array accessible');
@@ -79,11 +82,11 @@ subtest 'clone a shared array' => sub {
     $cloned->[0] = 999;
     is($shared->[0], 10, 'original array unchanged after mutating clone');
     is($cloned->[0], 999, 'clone array reflects mutation');
-};
+}
 
 # --- Test 3: Clone a shared scalar ---
 
-subtest 'clone a shared scalar ref' => sub {
+{
     my $val :shared = 42;
 
     is($val, 42, 'original shared scalar accessible');
@@ -96,11 +99,11 @@ subtest 'clone a shared scalar ref' => sub {
     # Clone is independent
     $$cloned = 999;
     is($val, 42, 'original scalar unchanged after mutating clone');
-};
+}
 
 # --- Test 4: Clone a nested shared structure ---
 
-subtest 'clone a nested shared structure' => sub {
+{
     my $shared = shared_clone({
         name   => 'test',
         values => [1, 2, 3],
@@ -123,11 +126,11 @@ subtest 'clone a nested shared structure' => sub {
     is($shared->{name}, 'test', 'original name unchanged');
     is($shared->{values}[0], 1, 'original nested array unchanged');
     is($shared->{nested}{a}, 'deep', 'original deep hash unchanged');
-};
+}
 
 # --- Test 5: Clone in a thread context ---
 
-subtest 'clone shared data inside a thread' => sub {
+{
     my $shared = shared_clone({ key => 'value' });
 
     my $thr = threads->create(sub {
@@ -144,16 +147,16 @@ subtest 'clone shared data inside a thread' => sub {
     ok($result->{ok}, 'clone() inside thread does not die')
         or diag("thread clone died: $result->{error}");
     is($result->{val}, 'value', 'cloned value correct inside thread');
-};
+}
 
 # --- Test 6: Clone is not shared ---
 
-subtest 'clone of shared data is not shared' => sub {
+{
     my $shared = shared_clone({ x => 1 });
     my $cloned = clone($shared);
 
     ok(defined(threads::shared::is_shared($shared)), 'original is shared');
     ok(!defined(threads::shared::is_shared($cloned)), 'clone is not shared');
-};
+}
 
 done_testing();

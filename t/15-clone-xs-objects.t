@@ -6,6 +6,9 @@
 # Math::BigInt with GMP backend stores data in opaque mpz_t pointers
 # via PERL_MAGIC_ext. Cloning must invoke the vtable's svt_dup callback
 # to properly duplicate the underlying C data.
+#
+# NOTE: uses SKIP blocks instead of subtest to avoid Test2::API::Context
+# global destruction warnings on older Perls (GH #78).
 
 use strict;
 use warnings;
@@ -15,7 +18,7 @@ use Scalar::Util qw(refaddr);
 
 # --- Control tests: Clone handles Regexp and basic blessed refs fine ---
 
-subtest 'clone Regexp objects (control - known to work)' => sub {
+{
     my $pattern = 'foo\d+bar';
     my $re = qr/$pattern/i;
     my $cloned = clone($re);
@@ -23,13 +26,13 @@ subtest 'clone Regexp objects (control - known to work)' => sub {
     is(ref($cloned), 'Regexp', 'cloned regexp has correct type');
     ok('FOO42BAR' =~ $cloned, 'cloned regexp matches correctly');
     ok('baz' !~ $cloned, 'cloned regexp rejects non-matches');
-};
+}
 
 # --- Math::BigInt with pure Perl backend (control - should work) ---
 
-subtest 'clone Math::BigInt with Calc backend (control)' => sub {
+SKIP: {
     eval { require Math::BigInt };
-    plan skip_all => 'Math::BigInt not available' if $@;
+    skip 'Math::BigInt not available', 5 if $@;
 
     # Force Calc backend (pure Perl) to ensure no GMP interference
     Math::BigInt->import(lib => 'Calc');
@@ -45,62 +48,55 @@ subtest 'clone Math::BigInt with Calc backend (control)' => sub {
     $cloned->badd(1);
     is($orig->bstr(), '12345678901234567890', 'original unchanged after mutating clone');
     is($cloned->bstr(), '12345678901234567891', 'clone reflects mutation');
-};
+}
 
 # --- Math::BigInt with GMP backend (the actual bug from issue #16) ---
 
-subtest 'clone Math::BigInt::GMP objects (issue #16)' => sub {
-    # Must check availability first, then use at compile-time equivalent
+SKIP: {
     eval { require Math::BigInt::GMP };
-    plan skip_all => 'Math::BigInt::GMP not available' if $@;
+    skip 'Math::BigInt::GMP not available', 5 if $@;
 
-    # Use a fresh package to get a clean GMP backend binding
+    # Must use a fresh package to get a clean GMP backend binding
     my $orig = eval q{
         package CloneTestGMP;
         use Math::BigInt lib => 'GMP';
         Math::BigInt->new('42');
     };
 
-    plan skip_all => "Failed to create GMP-backed BigInt: $@" if $@;
+    skip "Failed to create GMP-backed BigInt: $@", 5 if $@;
 
     # Verify we are actually using GMP backend
     my $lib = Math::BigInt->config()->{lib} || '';
 
-    SKIP: {
-        skip 'GMP backend not active despite module being installed', 5
-            unless $lib =~ /GMP/;
+    skip 'GMP backend not active despite module being installed', 5
+        unless $lib =~ /GMP/;
 
-        ok(1, "using GMP backend: $lib");
+    ok(1, "using GMP backend: $lib");
 
-        # This is the core reproduction of issue #16:
-        # clone() copies the Perl structure but the GMP mpz pointer becomes invalid
-        my $cloned = eval { clone($orig) };
-        ok(!$@, 'clone() does not die') or diag("clone() died: $@");
+    # This is the core reproduction of issue #16:
+    # clone() copies the Perl structure but the GMP mpz pointer becomes invalid
+    my $cloned = eval { clone($orig) };
+    ok(!$@, 'clone() does not die') or diag("clone() died: $@");
 
-        SKIP: {
-            skip 'clone() failed', 3 unless defined $cloned;
+    skip 'clone() failed', 3 unless defined $cloned;
 
-            is(ref($cloned), ref($orig), 'cloned object has same class');
+    is(ref($cloned), ref($orig), 'cloned object has same class');
 
-            # This is where the bug manifests:
-            # "failed to fetch mpz pointer"
-            my $value = eval { $cloned->bstr() };
-            ok(!$@, 'bstr() on cloned object does not die')
-                or diag("bstr() died: $@");
+    # This is where the bug manifests:
+    # "failed to fetch mpz pointer"
+    my $value = eval { $cloned->bstr() };
+    ok(!$@, 'bstr() on cloned object does not die')
+        or diag("bstr() died: $@");
 
-            SKIP: {
-                skip 'bstr() failed', 1 if $@;
-                is($value, '42', 'cloned value is correct');
-            }
-        }
-    }
-};
+    skip 'bstr() failed', 1 if $@;
+    is($value, '42', 'cloned value is correct');
+}
 
 # --- Math::BigFloat with GMP backend (related case) ---
 
-subtest 'clone Math::BigFloat::GMP objects (related)' => sub {
+SKIP: {
     eval { require Math::BigInt::GMP };
-    plan skip_all => 'Math::BigFloat with GMP not available' if $@;
+    skip 'Math::BigFloat with GMP not available', 3 if $@;
 
     my $orig = eval q{
         package CloneTestGMPFloat;
@@ -108,20 +104,18 @@ subtest 'clone Math::BigFloat::GMP objects (related)' => sub {
         Math::BigFloat->new('3.14159');
     };
 
-    plan skip_all => "Failed to create GMP-backed BigFloat: $@" if $@;
+    skip "Failed to create GMP-backed BigFloat: $@", 3 if $@;
 
     my $cloned = eval { clone($orig) };
     ok(!$@, 'clone() does not die') or diag("clone() died: $@");
 
-    SKIP: {
-        skip 'clone() failed', 2 unless defined $cloned;
+    skip 'clone() failed', 2 unless defined $cloned;
 
-        is(ref($cloned), ref($orig), 'cloned float has same class');
+    is(ref($cloned), ref($orig), 'cloned float has same class');
 
-        my $value = eval { $cloned->bstr() };
-        ok(!$@, 'bstr() on cloned float does not die')
-            or diag("bstr() died: $@");
-    }
-};
+    my $value = eval { $cloned->bstr() };
+    ok(!$@, 'bstr() on cloned float does not die')
+        or diag("bstr() died: $@");
+}
 
 done_testing();
