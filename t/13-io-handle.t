@@ -132,6 +132,7 @@ SKIP: {
 SKIP: {
     eval { require DBI; require DBD::SQLite }
         or skip "DBI + DBD::SQLite required for DBI tests", 4;
+    skip "fork() not available (Windows)", 4 unless _can_fork();
 
     my $result = _run_in_subprocess(sub {
         my $dbh = DBI->connect("dbi:SQLite:dbname=:memory:", "", "",
@@ -177,6 +178,7 @@ SKIP: {
 SKIP: {
     eval { require DBI; require DBD::SQLite }
         or skip "DBI + DBD::SQLite required for sth tests", 2;
+    skip "fork() not available (Windows)", 2 unless _can_fork();
 
     my $result = _run_in_subprocess(sub {
         my $dbh = DBI->connect("dbi:SQLite:dbname=:memory:", "", "",
@@ -206,6 +208,21 @@ SKIP: {
     my %r = map { /^(\w+)=(.*)/ ? ($1 => $2) : () } split /\n/, $result;
     ok($r{clone_ok},       "clone of DBI statement handle does not segfault");
     ok($r{original_works}, "original statement handle still works after clone");
+}
+
+# Check whether fork() is usable.  Strawberry Perl on Windows implements
+# fork() via ithreads emulation which doesn't support pipe+fork reliably,
+# and some builds don't implement it at all.
+sub _can_fork {
+    return 0 if $^O eq 'MSWin32';
+    my $pid = eval { fork() };
+    return 0 unless defined $pid;
+    if ($pid == 0) {
+        require POSIX;
+        POSIX::_exit(0);
+    }
+    waitpid($pid, 0);
+    return 1;
 }
 
 # Run a code block in a forked child process with STDERR suppressed.
