@@ -4,6 +4,7 @@ use warnings;
 use Test::More;
 use Clone qw(clone);
 use Scalar::Util;
+use File::Spec;
 
 # GH #27: Cloning IO handles (filehandles, DBI-like objects) should not segfault.
 # Clone cannot deep-copy IO handles (they wrap C-level structures), but it
@@ -137,6 +138,8 @@ SKIP: {
 
 # --- Test 13-16: DBI database handle (the original GH #27 report) ---
 
+my $_saved_stderr;
+
 SKIP: {
     eval { require DBI; require DBD::SQLite }
         or skip "DBI + DBD::SQLite required for DBI tests", 4;
@@ -175,7 +178,18 @@ SKIP: {
 
     $sth->finish;
     $dbh->disconnect;
+
+    # Mute STDERR through scope exit — DBI's DESTROY dumps SV internals
+    # for magic-less clones stored in XS magic chains that _defang cannot
+    # reach via Perl-visible hash values.
+    open($_saved_stderr, '>&', STDERR);
+    open(STDERR, '>', File::Spec->devnull);
 }
+
+# Restore STDERR after DBI clone destruction
+open(STDERR, '>&', $_saved_stderr);
+close($_saved_stderr);
+undef $_saved_stderr;
 
 # --- Test 17-18: DBI statement handle ---
 
@@ -205,4 +219,13 @@ SKIP: {
 
     $sth->finish;
     $dbh->disconnect;
+
+    # Mute STDERR through scope exit (see comment in test 13-16 block)
+    open($_saved_stderr, '>&', STDERR);
+    open(STDERR, '>', File::Spec->devnull);
 }
+
+# Restore STDERR after DBI clone destruction
+open(STDERR, '>&', $_saved_stderr);
+close($_saved_stderr);
+undef $_saved_stderr;
