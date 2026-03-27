@@ -35,7 +35,7 @@ my %WriteMakefile_params = (
     dist => {
         COMPRESS => 'gzip -9f',
         SUFFIX   => 'gz',
-	TAR      => 'COPYFILE_DISABLE=1 TAR_OPTIONS="--no-xattrs --no-acls" gtar',
+        TAR      => 'COPYFILE_DISABLE=1 TAR_OPTIONS="--no-xattrs --no-acls" gtar',
         PREOP    => 'command -v xattr >/dev/null 2>&1 && xattr -cr $(DISTVNAME) || true',
     },
 );
