@@ -498,8 +498,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             case 't':	/* PERL_MAGIC_taint */
             case '<': /* PERL_MAGIC_backref */
             case '@':  /* PERL_MAGIC_arylen_p */
-              continue;
-              break;
+              continue; /* resumes the outer magic iteration loop */
             case 'P': /* PERL_MAGIC_tied */
             case 'p': /* PERL_MAGIC_tiedelem */
             case 'q': /* PERL_MAGIC_tiedscalar */
