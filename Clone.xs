@@ -552,33 +552,34 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         mg->mg_virtual = (MGVTBL *) NULL;
     }
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
-  if ( magic_ref )
+    /* For tied HV/AV (magic_ref > 0): skip direct element iteration;
+     * the tie magic cloned above handles the data. */
+  if ( !magic_ref )
   {
-    ;;
-  }
-  else if ( SvTYPE(ref) == SVt_PVHV )
-    clone = hv_clone (ref, clone, hseen, depth, rdepth, weakrefs);
-  else if ( SvTYPE(ref) == SVt_PVAV )
-    clone = av_clone (ref, clone, hseen, depth, rdepth, weakrefs);
+    if ( SvTYPE(ref) == SVt_PVHV )
+      clone = hv_clone (ref, clone, hseen, depth, rdepth, weakrefs);
+    else if ( SvTYPE(ref) == SVt_PVAV )
+      clone = av_clone (ref, clone, hseen, depth, rdepth, weakrefs);
     /* 3: REFERENCE (inlined for speed) */
-  else if (SvROK (ref))
-    {
-      TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
-      SvREFCNT_dec(SvRV(clone));
-      SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
-      if (SvOBJECT(SvRV(ref)))
+    else if (SvROK (ref))
       {
-          sv_bless (clone, SvSTASH (SvRV (ref)));
+        TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
+        SvREFCNT_dec(SvRV(clone));
+        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
+        if (SvOBJECT(SvRV(ref)))
+        {
+            sv_bless (clone, SvSTASH (SvRV (ref)));
+        }
+        if (SvWEAKREF(ref)) {
+            /* Defer weakening until after the entire clone graph is built.
+             * sv_rvweaken decrements the referent's refcount, which can
+             * destroy it if no other strong references exist yet.
+             * By deferring, we ensure all strong references are in place
+             * before any weakening occurs. (fixes GH #15) */
+            av_push(weakrefs, SvREFCNT_inc_simple_NN(clone));
+        }
       }
-      if (SvWEAKREF(ref)) {
-          /* Defer weakening until after the entire clone graph is built.
-           * sv_rvweaken decrements the referent's refcount, which can
-           * destroy it if no other strong references exist yet.
-           * By deferring, we ensure all strong references are in place
-           * before any weakening occurs. (fixes GH #15) */
-          av_push(weakrefs, SvREFCNT_inc_simple_NN(clone));
-      }
-    }
+  }
 
   TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
   return clone;
