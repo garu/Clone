@@ -329,13 +329,27 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
     clone = ref;
 
-#if PERL_REVISION >= 5 && PERL_VERSION > 8
-  /* This is a hack for perl 5.9.*, save everything */
-  /* until I find out why mg_find is no longer working */
-  visible = 1;
-#else
-  visible = (SvREFCNT(ref) > 1) || (SvMAGICAL(ref) && mg_find(ref, '<'));
-#endif
+  /* Track this SV in hseen only if it could be reached from multiple
+   * paths in the data structure.  Single-refcount, non-magical SVs
+   * are unique leaves — skipping the hash lookup/store for them is a
+   * significant win on structures with many distinct scalar values.
+   *
+   * Cases that require tracking:
+   *  - SvREFCNT > 1 : SV is shared (appears in multiple slots)
+   *  - SvMAGICAL     : may be a weakref target (backref '<' magic
+   *                    for non-HV types), tied, or carry other magic
+   *  - HV with SvOOK : since Perl 5.10, weakref back-references for
+   *                    HVs are stored in the HV's AUX struct (via
+   *                    SvOOK) rather than as PERL_MAGIC_backref.  An
+   *                    HV that is the target of a weakened reference
+   *                    has SvOOK set but is NOT SvMAGICAL, so we must
+   *                    check SvOOK explicitly for HVs.
+   *
+   * Historical note: Perl 5.9.x moved HV backrefs from magic to
+   * HvAUX; a blanket "visible = 1" was used as a workaround.  The
+   * check below replaces that with a targeted condition. */
+  visible = (SvREFCNT(ref) > 1) || SvMAGICAL(ref)
+          || (SvTYPE(ref) == SVt_PVHV && SvOOK(ref));
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
 
