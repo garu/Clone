@@ -10,6 +10,7 @@ our @EXPORT;
 our @EXPORT_OK = qw( clone );
 
 our $VERSION = '0.50';
+our $WARN    = 1;
 
 XSLoader::load('Clone', $VERSION);
 
@@ -135,7 +136,9 @@ For arrays and hashes, exceeding the limit triggers an iterative
 fallback that preserves deep-copy semantics without stack overflow.
 For other reference types (e.g. deeply nested scalar references),
 exceeding the limit emits a warning and returns a shared reference
-instead of a deep copy.
+instead of a deep copy.  To silence the warning:
+
+    $Clone::WARN = 0;
 
 You can override the depth limit by passing it as the second argument
 to C<clone()>:
