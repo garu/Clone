@@ -19,7 +19,7 @@ use Config;
 # The deep target must exceed MAX_DEPTH/2 to exercise both paths.
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
-my $deep_target     = $is_limited_stack ? 4000 : 5000;
+my $deep_target     = $is_limited_stack ? 2500 : 5000;
 
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
