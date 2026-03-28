@@ -11,17 +11,6 @@ https://security.metacpan.org/docs/guides/security-policy-for-authors.html
 
 # How to Report a Security Vulnerability
 
-Security vulnerabilities can be reported to the current Clone
-maintainers by using GitHub's **Report a vulnerability** submission form.
-On the repository's main page, select **Security** tab and then
-click on the button *Report a vulnerability*.
-Direct link: https://github.com/garu/Clone/security/advisories/new
-
-Please include as many details as possible, including code samples
-or test cases, so that we can reproduce the issue.  Check that your
-report does not expose any sensitive data, such as passwords,
-tokens, or personal information.
-
 If you would like any help with triaging the issue, or if the issue
 is being actively exploited, please copy the report to the CPAN
 Security Group (CPANSec) at <cpan-security@security.metacpan.org>.
