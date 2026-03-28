@@ -27,6 +27,7 @@ t/16-threads-shared.t
 t/17-threads-classdbi.t
 t/18-overload.t
 t/19-dualvar.t
+t/20-shared-sv.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
