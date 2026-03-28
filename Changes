@@ -1,5 +1,13 @@
 Revision history for Perl module Clone
 
+0.50 2026-03-28 atoomic
+  - fix: deep-copy HVs past MAX_DEPTH instead of aliasing (GH #93)
+  - fix: strip macOS xattrs from dist directory before packaging
+  - cleanup: remove unreachable break and empty magic_ref if-body in Clone.xs
+  - docs: update MAX_DEPTH limits to reflect actual platform values
+  - docs: add SECURITY.md policy for vulnerability reporting
+  - Prefer using gtar in Makefile.PL
+
 0.49 2026-03-24 21:23:44 atoomic
   - fix: exclude macOS extended attributes from dist tarball
   - fix: suppress DBI STDERR noise in t/13-io-handle.t (GH #82)
