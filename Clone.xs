@@ -327,8 +327,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
          * recurse further without risking stack overflow.  Return a
          * shared reference and warn so the caller knows the clone is
          * incomplete. */
-        Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
-                  "reference will be shared, not deep-copied", MAX_DEPTH);
+        {
+            SV *warn_sv = get_sv("Clone::WARN", 0);
+            if (!warn_sv || SvTRUE(warn_sv))
+                Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
+                          "reference will be shared, not deep-copied", MAX_DEPTH);
+        }
         return SvREFCNT_inc(ref);
     }
 

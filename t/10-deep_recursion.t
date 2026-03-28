@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 16;
+use Test::More tests => 17;
 use Clone qw(clone);
 use Config;
 
@@ -242,4 +242,14 @@ my $moderate_target  = 1000;
         like($warnings[0], qr/depth limit.*exceeded/,
              "Warning should mention depth limit exceeded");
     }
+
+    # Test 17: $Clone::WARN = 0 suppresses the warning
+    my @suppressed;
+    {
+        local $Clone::WARN = 0;
+        local $SIG{__WARN__} = sub { push @suppressed, @_ };
+        clone($ref);
+    }
+    is(scalar @suppressed, 0,
+       "Setting \$Clone::WARN = 0 should suppress depth-limit warnings");
 }
