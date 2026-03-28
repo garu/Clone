@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 13;
+use Test::More tests => 16;
 use Clone qw(clone);
 use Config;
 
@@ -204,5 +204,42 @@ my $moderate_target  = 1000;
         $walk_clone->[0]{_sentinel} = "mutation";
         ok(!exists $walk_orig->[0]{_sentinel},
            "Mutating clone hash at depth $depth_target should not affect original");
+    }
+}
+
+# Test 14-16: Deep scalar ref chains past MAX_DEPTH emit a warning
+# Unlike arrays/hashes, scalar refs have no iterative fallback —
+# they get a shared reference (SvREFCNT_inc) and a warning.
+# Each scalar ref adds 1 rdepth, so we need > MAX_DEPTH levels.
+# NB: we must build a true chain via an array of refs, not
+# "$ref = \$ref" which creates a cycle (back to the same SV).
+{
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $ref_depth = $max_depth_val + 500;
+
+    my @chain;
+    $chain[0] = "leaf";
+    for my $i (1 .. $ref_depth) {
+        $chain[$i] = \$chain[$i - 1];
+    }
+    my $ref = $chain[-1];
+
+    my @warnings;
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        clone($ref);
+    };
+
+    ok(!$@ && defined($cloned),
+       "Should clone $ref_depth-deep scalar ref chain without dying")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    ok(@warnings > 0,
+       "Should warn about shallow-copy fallback for scalar refs past MAX_DEPTH");
+
+    SKIP: {
+        skip "No warnings captured", 1 unless @warnings;
+        like($warnings[0], qr/depth limit.*exceeded/,
+             "Warning should mention depth limit exceeded");
     }
 }
