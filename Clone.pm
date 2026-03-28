@@ -131,9 +131,11 @@ Windows/Cygwin. Each nesting level consumes approximately 2 rdepth
 units, so the effective limits are roughly 2000 nesting levels on
 Linux/macOS and 1000 on Windows/Cygwin.
 
-For arrays, exceeding the limit triggers an iterative fallback that
-avoids stack overflow. For other reference types (hashes, scalars),
-exceeding the limit produces a warning and a shallow copy.
+For arrays and hashes, exceeding the limit triggers an iterative
+fallback that preserves deep-copy semantics without stack overflow.
+For other reference types (e.g. deeply nested scalar references),
+exceeding the limit emits a warning and returns a shared reference
+instead of a deep copy.
 
 You can override the depth limit by passing it as the second argument
 to C<clone()>:

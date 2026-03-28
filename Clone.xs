@@ -323,7 +323,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
                 sv_bless(clone_rv, SvSTASH(SvRV(ref)));
             return clone_rv;
         }
-        /* For other types, just return a reference to avoid stack overflow */
+        /* For other types (e.g. deeply nested scalar refs), we cannot
+         * recurse further without risking stack overflow.  Return a
+         * shared reference and warn so the caller knows the clone is
+         * incomplete. */
+        Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
+                  "reference will be shared, not deep-copied", MAX_DEPTH);
         return SvREFCNT_inc(ref);
     }
 
