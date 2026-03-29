@@ -2,7 +2,8 @@
 
 use strict;
 use warnings;
-use Test::More tests => 17;
+use Test::More tests => 18;
+use Scalar::Util qw(refaddr);
 use Clone qw(clone);
 use Config;
 
@@ -207,49 +208,73 @@ my $moderate_target  = 1000;
     }
 }
 
-# Test 14-16: Deep scalar ref chains past MAX_DEPTH emit a warning
-# Unlike arrays/hashes, scalar refs have no iterative fallback —
-# they get a shared reference (SvREFCNT_inc) and a warning.
-# Each scalar ref adds 1 rdepth, so we need > MAX_DEPTH levels.
-# NB: we must build a true chain via an array of refs, not
+# Tests 14-17: Deep scalar ref chains past MAX_DEPTH — iterative cloning
+# (GH #107: shallow copy silently violated isolation for deeply nested scalar refs)
+#
+# Each scalar ref adds 1 rdepth, so we need > MAX_DEPTH levels to exercise
+# the MAX_DEPTH guard.  We must build a true chain via an array of refs, not
 # "$ref = \$ref" which creates a cycle (back to the same SV).
 {
     my $max_depth_val = $is_limited_stack ? 2000 : 4000;
-    my $ref_depth = $max_depth_val + 500;
+    my $ref_depth     = $max_depth_val + 500;
 
+    # Chain: $chain[0] = \$leaf_val,  $chain[i] = \$chain[i-1]
+    # So $chain[-1] is a ref_depth-deep scalar-ref chain whose ultimate leaf
+    # is $leaf_val.
+    my $leaf_val = "original";
     my @chain;
-    $chain[0] = "leaf";
+    $chain[0] = \$leaf_val;
     for my $i (1 .. $ref_depth) {
         $chain[$i] = \$chain[$i - 1];
     }
-    my $ref = $chain[-1];
+    my $deep = $chain[-1];
 
+    # Test 14: clone must not die
     my @warnings;
     my $cloned = eval {
         local $SIG{__WARN__} = sub { push @warnings, @_ };
-        clone($ref);
+        clone($deep);
     };
-
     ok(!$@ && defined($cloned),
        "Should clone $ref_depth-deep scalar ref chain without dying")
         or diag("Error: " . ($@ || "undefined result"));
 
-    ok(@warnings > 0,
-       "Should warn about shallow-copy fallback for scalar refs past MAX_DEPTH");
-
+    # Test 15: clone must be a genuine deep copy, not a shared alias
+    # (FAILS before the fix: old code returns SvREFCNT_inc(ref) which IS the
+    # original SV — any write through the clone pollutes the original object)
     SKIP: {
-        skip "No warnings captured", 1 unless @warnings;
-        like($warnings[0], qr/depth limit.*exceeded/,
-             "Warning should mention depth limit exceeded");
+        skip "Clone failed or not a ref", 2 unless defined($cloned) && ref($cloned);
+
+        # Navigate down $ref_depth levels through the CLONED chain to reach
+        # the innermost ref (the clone of $chain[0] = \$leaf_val).
+        my $clone_inner = $cloned;
+        for (1 .. $ref_depth) {
+            last unless ref $clone_inner;
+            $clone_inner = $$clone_inner;
+        }
+
+        SKIP: {
+            skip "Could not reach innermost ref in clone", 2
+                unless ref $clone_inner;
+
+            # Mutating through the cloned innermost ref must NOT affect $leaf_val.
+            $$clone_inner = "mutated";
+            is($leaf_val, "original",
+               "Mutating through deeply-cloned scalar ref must not affect original (GH #107)");
+
+            # The innermost ref in the clone must be a different SV from the
+            # corresponding original ($chain[0] = \$leaf_val).
+            isnt(refaddr($clone_inner), refaddr($chain[0]),
+                 "Clone innermost ref must be a distinct SV, not an alias");
+        }
     }
 
-    # Test 17: $Clone::WARN = 0 suppresses the warning
-    my @suppressed;
-    {
-        local $Clone::WARN = 0;
-        local $SIG{__WARN__} = sub { push @suppressed, @_ };
-        clone($ref);
-    }
-    is(scalar @suppressed, 0,
-       "Setting \$Clone::WARN = 0 should suppress depth-limit warnings");
+    # Test 16: no warning should be emitted for deep scalar ref chains
+    # (FAILS before the fix: old code emitted "depth limit exceeded" warnings)
+    is(scalar @warnings, 0,
+       "No warnings should be emitted when cloning deep scalar ref chain (GH #107)");
+
+    # Test 17: $Clone::WARN = 0 must not cause errors (regression guard)
+    my $ok = eval { local $Clone::WARN = 0; clone($deep); 1 };
+    ok($ok, "\$Clone::WARN = 0 must not cause errors when cloning deep scalar refs");
 }
