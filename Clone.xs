@@ -695,8 +695,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
               Copy(mg->mg_ptr, mg_ptr, mg->mg_len, char);
             }
           } else if (mg->mg_len == HEf_SVKEY) {
-            /* let's share the SV for now */
-            SvREFCNT_inc((SV*)mg->mg_ptr);
+            /* mg_ptr is an SV*; sv_magic() below will SvREFCNT_inc it */
           } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
             if (mg->mg_ptr) {
               STRLEN *cache;
