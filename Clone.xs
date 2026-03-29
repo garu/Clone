@@ -46,6 +46,7 @@ static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
 static SV *av_clone_iterative(SV *, HV *, int, AV *);
 static SV *hv_clone_iterative(SV *, HV *, int, AV *);
+static SV *rv_clone_iterative(SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
 #define TRACEME(a) printf("%s:%d: ",__FUNCTION__, __LINE__) && printf a;
@@ -239,6 +240,82 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     return (SV *)root_clone;
 }
 
+/* Iterative clone for deeply nested scalar-ref chains past MAX_DEPTH.
+ * Avoids stack overflow by unrolling the RV->RV->...->leaf chain without
+ * recursion, then rebuilding from the bottom up.
+ *
+ * This mirrors av_clone_iterative/hv_clone_iterative: instead of returning
+ * SvREFCNT_inc(ref) (a shared alias), it produces a true deep copy of the
+ * entire scalar-ref chain, preserving isolation. (GH #107) */
+static SV *
+rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+{
+    SV **chain;
+    I32 chain_len;
+    I32 chain_max;
+    SV *current;
+    SV *leaf_clone;
+    SV *result;
+    SV **seen;
+    I32 i;
+
+    if (!ref || !SvROK(ref)) return NULL;
+
+    chain_max = 64;
+    chain_len = 0;
+    Newx(chain, chain_max, SV *);
+
+    /* Walk the RV chain, collecting each node until we reach a non-RV leaf */
+    current = ref;
+    while (current && SvROK(current)) {
+        if (chain_len >= chain_max) {
+            chain_max *= 2;
+            Renew(chain, chain_max, SV *);
+        }
+        chain[chain_len++] = current;
+        current = SvRV(current);
+    }
+
+    /* current is now the non-RV leaf; clone it based on its type */
+    leaf_clone = NULL;
+    if (current) {
+        if (SvTYPE(current) == SVt_PVAV) {
+            leaf_clone = av_clone_iterative(current, hseen, rdepth, weakrefs);
+        } else if (SvTYPE(current) == SVt_PVHV) {
+            leaf_clone = hv_clone_iterative(current, hseen, rdepth, weakrefs);
+        } else {
+            seen = CLONE_FETCH(current);
+            if (seen) {
+                leaf_clone = SvREFCNT_inc(*seen);
+            } else {
+                leaf_clone = newSVsv(current);
+                if ((SvREFCNT(current) > 1) || SvMAGICAL(current))
+                    CLONE_STORE(current, leaf_clone);
+            }
+        }
+    }
+
+    if (!leaf_clone) {
+        Safefree(chain);
+        return SvREFCNT_inc(ref);
+    }
+
+    /* Rebuild the RV chain from the bottom up */
+    result = leaf_clone;
+    for (i = chain_len - 1; i >= 0; i--) {
+        SV *rv = chain[i];
+        SV *new_rv = newRV_noinc(result);
+        if (SvOBJECT(SvRV(rv)))
+            sv_bless(new_rv, SvSTASH(SvRV(rv)));
+        if (SvWEAKREF(rv))
+            av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+        result = new_rv;
+    }
+
+    Safefree(chain);
+    return result;
+}
+
 static SV *
 av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
@@ -323,10 +400,14 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
                 sv_bless(clone_rv, SvSTASH(SvRV(ref)));
             return clone_rv;
         }
-        /* For other types (e.g. deeply nested scalar refs), we cannot
-         * recurse further without risking stack overflow.  Return a
-         * shared reference and warn so the caller knows the clone is
-         * incomplete. */
+        /* For other RV types (e.g. deeply nested scalar refs), unroll the
+         * chain iteratively to produce a true deep copy.  This prevents the
+         * "shared alias" vulnerability described in GH #107. */
+        if (SvROK(ref))
+            return rv_clone_iterative(ref, hseen, rdepth, weakrefs);
+        /* Non-RV, non-AV, non-HV past MAX_DEPTH (e.g. PVGV, PVCV): these
+         * are not deep-copyable regardless of depth; fall through to the
+         * normal path which returns SvREFCNT_inc for those types. */
         {
             SV *warn_sv = get_sv("Clone::WARN", 0);
             if (!warn_sv || SvTRUE(warn_sv))
