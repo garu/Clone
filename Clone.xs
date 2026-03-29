@@ -139,8 +139,19 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
             while (current_ref && SvROK(current_ref) &&
                    SvTYPE(SvRV(current_ref)) == SVt_PVAV &&
                    av_len((AV*)SvRV(current_ref)) == 0) {
-                AV *new_av = newAV();
                 SV *inner_sv = SvRV(current_ref);
+                SV **already;
+                AV *new_av;
+
+                /* Guard against circular refs: if this AV was already cloned,
+                 * link to the existing clone and stop walking. */
+                already = CLONE_FETCH(inner_sv);
+                if (already) {
+                    av_store(tail, 0, newRV_inc(*already));
+                    break;
+                }
+
+                new_av = newAV();
 
                 av_store(tail, 0, newRV_noinc((SV*)new_av));
                 CLONE_STORE(inner_sv, (SV*)new_av);
