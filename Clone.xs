@@ -689,11 +689,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         { /* clone the mg_ptr pv */
           char *mg_ptr = mg->mg_ptr; /* default */
 
-          if (mg->mg_len >= 0) { /* copy the pv */
-            if (mg_ptr) {
-              Newxz(mg_ptr, mg->mg_len+1, char);
-              Copy(mg->mg_ptr, mg_ptr, mg->mg_len, char);
-            }
+          if (mg->mg_len >= 0) {
+            /* sv_magic() with non-negative namlen calls savepvn()
+             * internally to make its own copy — no need to allocate
+             * an intermediate buffer here; just pass the original
+             * mg_ptr through.  (fixes 20-year-old memory leak) */
           } else if (mg->mg_len == HEf_SVKEY) {
             /* mg_ptr is an SV*; sv_magic() below will SvREFCNT_inc it */
           } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
