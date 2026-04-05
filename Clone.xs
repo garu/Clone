@@ -416,9 +416,31 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
          * "shared alias" vulnerability described in GH #107. */
         if (SvROK(ref))
             return rv_clone_iterative(ref, hseen, rdepth, weakrefs);
-        /* Non-RV, non-AV, non-HV past MAX_DEPTH (e.g. PVGV, PVCV): these
-         * are not deep-copyable regardless of depth; fall through to the
-         * normal path which returns SvREFCNT_inc for those types. */
+        /* Simple scalars (non-reference, non-container) can always be
+         * safely copied without recursion.  newSVsv creates an independent
+         * copy, preventing aliasing of leaf values inside iteratively-cloned
+         * containers.  Without this, hv_clone_iterative / av_clone_iterative
+         * would share leaf SVs between original and clone — mutations
+         * through a reference to the clone's value would corrupt the
+         * original.  (GH #113) */
+        switch (SvTYPE(ref)) {
+            case SVt_NULL:
+            case SVt_IV:
+            case SVt_NV:
+#if PERL_VERSION <= 10
+            case SVt_RV:
+#endif
+            case SVt_PV:
+            case SVt_PVIV:
+            case SVt_PVNV:
+            case SVt_PVMG:
+                return newSVsv(ref);
+            default:
+                break;
+        }
+        /* Non-clonable types past MAX_DEPTH (e.g. PVGV, PVCV, PVFM, PVIO):
+         * these cannot be deep-copied regardless of depth; share with a
+         * warning. */
         {
             SV *warn_sv = get_sv("Clone::WARN", 0);
             if (!warn_sv || SvTRUE(warn_sv))
