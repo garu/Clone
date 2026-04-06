@@ -763,9 +763,17 @@ clone(self, depth=-1)
 	int depth
 	PREINIT:
 	SV *clone = &PL_sv_undef;
-        HV *hseen = newHV();
-        AV *weakrefs = newAV();
+	HV *hseen;
+	AV *weakrefs;
 	PPCODE:
+	hseen = newHV();
+	weakrefs = newAV();
+	/* Register for automatic cleanup on scope exit.  If sv_clone()
+	 * or the weakening loop croaks, the longjmp would skip the
+	 * explicit SvREFCNT_dec below — SAVEFREESV ensures both are
+	 * freed during stack unwinding. */
+	SAVEFREESV((SV *)hseen);
+	SAVEFREESV((SV *)weakrefs);
 	TRACEME(("ref = 0x%x\n", self));
 	clone = sv_clone(self, hseen, depth, 0, weakrefs);
 	/* Now apply deferred weakening (GH #15).
@@ -781,8 +789,6 @@ clone(self, depth=-1)
 	        }
 	    }
 	}
-	hv_clear(hseen);  /* Free HV */
-        SvREFCNT_dec((SV *)hseen);
-        SvREFCNT_dec((SV *)weakrefs);
+	/* hseen and weakrefs are freed automatically via SAVEFREESV */
 	EXTEND(SP,1);
 	PUSHs(sv_2mortal(clone));
