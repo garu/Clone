@@ -153,6 +153,15 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 
                 new_av = newAV();
 
+                /* Preserve blessing if the original AV is an object.
+                 * Without this, blessed arrayrefs in the chain lose
+                 * their class when cloned via the iterative path. */
+                if (SvOBJECT(inner_sv)) {
+                    SV *tmp_rv = newRV((SV *)new_av);
+                    sv_bless(tmp_rv, SvSTASH(inner_sv));
+                    SvREFCNT_dec(tmp_rv);
+                }
+
                 av_store(tail, 0, newRV_noinc((SV*)new_av));
                 CLONE_STORE(inner_sv, (SV*)new_av);
 

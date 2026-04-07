@@ -31,6 +31,7 @@ t/20-shared-sv.t
 t/21-circular-iterative.t
 t/22-deep-leaf-isolation.t
 t/22-hefsvkey-refcnt.t
+t/22-iterative-bless.t
 t/22-mgptr-memleak.t
 t/dclone.t
 t/dump.pl
