@@ -147,7 +147,10 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                  * link to the existing clone and stop walking. */
                 already = CLONE_FETCH(inner_sv);
                 if (already) {
-                    av_store(tail, 0, newRV_inc(*already));
+                    SV *circ_rv = newRV_inc(*already);
+                    av_store(tail, 0, circ_rv);
+                    if (SvWEAKREF(current_ref))
+                        av_push(weakrefs, SvREFCNT_inc_simple_NN(circ_rv));
                     break;
                 }
 
@@ -162,7 +165,12 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                     SvREFCNT_dec(tmp_rv);
                 }
 
-                av_store(tail, 0, newRV_noinc((SV*)new_av));
+                {
+                    SV *chain_rv = newRV_noinc((SV*)new_av);
+                    av_store(tail, 0, chain_rv);
+                    if (SvWEAKREF(current_ref))
+                        av_push(weakrefs, SvREFCNT_inc_simple_NN(chain_rv));
+                }
                 CLONE_STORE(inner_sv, (SV*)new_av);
 
                 /* Advance to the next element in the chain */
@@ -179,7 +187,10 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                     /* Final AV — clone it iteratively too */
                     SV *leaf = av_clone_iterative(SvRV(current_ref),
                                                   hseen, rdepth, weakrefs);
-                    av_store(tail, 0, newRV_noinc(leaf));
+                    SV *leaf_rv = newRV_noinc(leaf);
+                    av_store(tail, 0, leaf_rv);
+                    if (SvWEAKREF(current_ref))
+                        av_push(weakrefs, SvREFCNT_inc_simple_NN(leaf_rv));
                 } else if (SvROK(current_ref)) {
                     av_store(tail, 0,
                              sv_clone(current_ref, hseen, 1, rdepth, weakrefs));
@@ -410,6 +421,8 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             SV *clone_rv = newRV_noinc(clone_av);
             if (SvOBJECT(SvRV(ref)))
                 sv_bless(clone_rv, SvSTASH(SvRV(ref)));
+            if (SvWEAKREF(ref))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(clone_rv));
             return clone_rv;
         }
         /* For RVs pointing to HVs, use the iterative hash path */
@@ -418,6 +431,8 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             SV *clone_rv = newRV_noinc(clone_hv);
             if (SvOBJECT(SvRV(ref)))
                 sv_bless(clone_rv, SvSTASH(SvRV(ref)));
+            if (SvWEAKREF(ref))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(clone_rv));
             return clone_rv;
         }
         /* For other RV types (e.g. deeply nested scalar refs), unroll the
