@@ -132,11 +132,14 @@ Windows/Cygwin. Each nesting level consumes approximately 2 rdepth
 units, so the effective limits are roughly 2000 nesting levels on
 Linux/macOS and 1000 on Windows/Cygwin.
 
-For arrays and hashes, exceeding the limit triggers an iterative
-fallback that preserves deep-copy semantics without stack overflow.
-For other reference types (e.g. deeply nested scalar references),
-exceeding the limit emits a warning and returns a shared reference
-instead of a deep copy.  To silence the warning:
+When the limit is exceeded, Clone switches to an iterative fallback
+that preserves deep-copy semantics without stack overflow. This
+covers arrays, hashes, and all reference types (including deeply
+nested scalar references).
+
+Non-clonable types (globs, code references, formats, IO handles)
+are always shared regardless of depth. If one of these is encountered
+past the depth limit, a warning is emitted. To silence it:
 
     $Clone::WARN = 0;
 
@@ -147,10 +150,11 @@ to C<clone()>:
 
 =item * Filehandles and IO Objects
 
-Filehandles and IO objects are cloned, but the underlying file descriptor
-is shared. Both the original and cloned filehandle will refer to the same
-file position. For DBI database handles and similar objects, Clone attempts
-to handle them safely, but behavior may vary depending on the object type.
+Filehandles and IO objects are not deep-copied. The clone shares the
+same underlying filehandle object as the original (reference count is
+incremented). For DBI database handles, Clone skips opaque XS magic
+to avoid dangling pointers, but the resulting clone should not be used
+as a database handle.
 
 =item * Code References
 
