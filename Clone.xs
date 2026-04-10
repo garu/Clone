@@ -224,14 +224,21 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 }
 
 /* Iterative hash clone for use when rdepth exceeds MAX_DEPTH.
- * Mirrors av_clone_iterative: creates a new HV, registers it in hseen for
- * circular-ref safety, then clones each value via sv_clone (which will
- * re-enter this function for any nested HVs still above MAX_DEPTH). */
+ * Creates a new HV, registers it in hseen for circular-ref safety,
+ * then clones each value.
+ *
+ * Single-entry hash chains ({k=>{k=>{k=>...}}}) are unrolled
+ * iteratively to avoid stack overflow.  Without this optimization,
+ * each nesting level recurses through sv_clone -> hv_clone_iterative,
+ * consuming ~2 C stack frames per level.  On Windows (1 MB stack),
+ * roughly 500 additional levels past MAX_DEPTH would crash. */
 static SV *
 hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
     HV *self;
     HV *root_clone;
+    HV *current_self;
+    HV *current_clone;
     SV **seen = NULL;
     HE *next = NULL;
 
@@ -247,20 +254,84 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     root_clone = newHV();
     CLONE_STORE(ref, (SV *)root_clone);
 
-    /* Pre-size to avoid incremental resizing */
-    if (HvKEYS(self) > 0)
-        hv_ksplit(root_clone, HvKEYS(self));
+    current_self = self;
+    current_clone = root_clone;
 
-    /* Clone each value; sv_clone will use the iterative path again for any
-     * nested structures that are still above MAX_DEPTH. */
-    hv_iterinit(self);
-    while ((next = hv_iternext(self))) {
+    /* Optimized path: walk single-entry hash chains iteratively.
+     * This mirrors av_clone_iterative's chain-walking for [[[...]]]. */
+    while (HvKEYS(current_self) == 1) {
+        HE *he;
+        I32 klen;
+        char *kpv;
+        SV *val;
+        SV *inner;
+        SV **already;
+        HV *inner_clone;
+        SV *rv;
+        SV *cloned_val;
+
+        hv_ksplit(current_clone, 1);
+
+        hv_iterinit(current_self);
+        he = hv_iternext(current_self);
+        if (!he) break;
+
+        kpv = hv_iterkey(he, &klen);
+        val = hv_iterval(current_self, he);
+
+        /* Only chain-walk if the value is an RV pointing to another HV */
+        if (!SvROK(val) || SvTYPE(SvRV(val)) != SVt_PVHV) {
+            /* Non-chain value: clone normally and we're done */
+            cloned_val = sv_clone(val, hseen, 1, rdepth, weakrefs);
+            if (HeKUTF8(he)) klen = -klen;
+            hv_store(current_clone, kpv, klen, cloned_val, HeHASH(he));
+            return (SV *)root_clone;
+        }
+
+        inner = SvRV(val);
+        already = CLONE_FETCH(inner);
+
+        if (already) {
+            /* Circular ref or already cloned: link and stop */
+            rv = newRV_inc(*already);
+            if (SvOBJECT(inner))
+                sv_bless(rv, SvSTASH(inner));
+            if (SvWEAKREF(val))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
+            if (HeKUTF8(he)) klen = -klen;
+            hv_store(current_clone, kpv, klen, rv, HeHASH(he));
+            return (SV *)root_clone;
+        }
+
+        /* Create the next level's clone HV and link it */
+        inner_clone = newHV();
+        CLONE_STORE(inner, (SV *)inner_clone);
+        rv = newRV_noinc((SV *)inner_clone);
+        if (SvOBJECT(inner))
+            sv_bless(rv, SvSTASH(inner));
+        if (SvWEAKREF(val))
+            av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
+        if (HeKUTF8(he)) klen = -klen;
+        hv_store(current_clone, kpv, klen, rv, HeHASH(he));
+
+        /* Advance to next level in the chain */
+        current_self = (HV *)inner;
+        current_clone = inner_clone;
+    }
+
+    /* General case: hash with 0 or multiple entries.
+     * Also reached when the chain-walk exits (multi-key tail). */
+    if (HvKEYS(current_self) > 0)
+        hv_ksplit(current_clone, HvKEYS(current_self));
+
+    hv_iterinit(current_self);
+    while ((next = hv_iternext(current_self))) {
         I32 klen;
         char *kpv = hv_iterkey(next, &klen);
-        SV *val = sv_clone(hv_iterval(self, next), hseen, 1, rdepth, weakrefs);
+        SV *val = sv_clone(hv_iterval(current_self, next), hseen, 1, rdepth, weakrefs);
         if (HeKUTF8(next))
             klen = -klen;
-        hv_store(root_clone, kpv, klen, val, HeHASH(next));
+        hv_store(current_clone, kpv, klen, val, HeHASH(next));
     }
 
     return (SV *)root_clone;
