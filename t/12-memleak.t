@@ -23,9 +23,13 @@ sub get_rss_kb {
         return undef;
     }
     elsif ($^O eq 'darwin') {
-        my $rss = `ps -o rss= -p $$`;
-        chomp $rss;
-        return $rss =~ /^\s*(\d+)/ ? $1 : undef;
+        # Use list form of open with an absolute path to avoid invoking a
+        # shell: on MacPorts the build user has no valid shell configured,
+        # so backticks fail with "Can't exec 'ps': Operation not permitted".
+        open(my $ps, '-|', '/bin/ps', '-o', 'rss=', '-p', $$) or return undef;
+        my $rss = <$ps>;
+        close $ps;
+        return defined($rss) && $rss =~ /^\s*(\d+)/ ? $1 : undef;
     }
     return undef;
 }
