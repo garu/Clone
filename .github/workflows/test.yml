@@ -161,6 +161,31 @@ jobs:
           RELEASE_TESTING: 1
 
 
+  macos-latest:
+    runs-on: macos-latest
+    needs: [ubuntu-latest]
+
+    env:
+      PERL_USE_UNSAFE_INC: 0
+      AUTHOR_TESTING: 1
+      AUTOMATED_TESTING: 1
+      RELEASE_TESTING: 1
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: perl -V
+      - name: install deps using cpm
+        uses: perl-actions/install-with-cpm@v1
+        with:
+          sudo: false
+          global: false
+          cpanfile: ".github/cpanfile.test"
+      - name: Set PERL5LIB to local lib
+        run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
+      - run: perl Makefile.PL
+      - run: make
+      - run: make test
+
   windows-latest:
     runs-on: windows-latest
     needs: [ubuntu-latest]
