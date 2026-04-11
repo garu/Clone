@@ -264,13 +264,6 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         I32 klen;
         char *kpv;
         SV *val;
-        SV *inner;
-        SV **already;
-        HV *inner_clone;
-        SV *rv;
-        SV *cloned_val;
-
-        hv_ksplit(current_clone, 1);
 
         hv_iterinit(current_self);
         he = hv_iternext(current_self);
@@ -282,41 +275,46 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         /* Only chain-walk if the value is an RV pointing to another HV */
         if (!SvROK(val) || SvTYPE(SvRV(val)) != SVt_PVHV) {
             /* Non-chain value: clone normally and we're done */
-            cloned_val = sv_clone(val, hseen, 1, rdepth, weakrefs);
+            SV *cloned_val = sv_clone(val, hseen, 1, rdepth, weakrefs);
             if (HeKUTF8(he)) klen = -klen;
             hv_store(current_clone, kpv, klen, cloned_val, HeHASH(he));
             return (SV *)root_clone;
         }
 
-        inner = SvRV(val);
-        already = CLONE_FETCH(inner);
+        {
+            SV *inner = SvRV(val);
+            SV **already = CLONE_FETCH(inner);
 
-        if (already) {
-            /* Circular ref or already cloned: link and stop */
-            rv = newRV_inc(*already);
-            if (SvOBJECT(inner))
-                sv_bless(rv, SvSTASH(inner));
-            if (SvWEAKREF(val))
-                av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
-            if (HeKUTF8(he)) klen = -klen;
-            hv_store(current_clone, kpv, klen, rv, HeHASH(he));
-            return (SV *)root_clone;
+            if (already) {
+                /* Circular ref or already cloned: link and stop */
+                SV *rv = newRV_inc(*already);
+                if (SvOBJECT(inner))
+                    sv_bless(rv, SvSTASH(inner));
+                if (SvWEAKREF(val))
+                    av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
+                if (HeKUTF8(he)) klen = -klen;
+                hv_store(current_clone, kpv, klen, rv, HeHASH(he));
+                return (SV *)root_clone;
+            }
+
+            /* Create the next level's clone HV and link it */
+            {
+                HV *inner_clone = newHV();
+                SV *rv;
+                CLONE_STORE(inner, (SV *)inner_clone);
+                rv = newRV_noinc((SV *)inner_clone);
+                if (SvOBJECT(inner))
+                    sv_bless(rv, SvSTASH(inner));
+                if (SvWEAKREF(val))
+                    av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
+                if (HeKUTF8(he)) klen = -klen;
+                hv_store(current_clone, kpv, klen, rv, HeHASH(he));
+
+                /* Advance to next level in the chain */
+                current_self = (HV *)inner;
+                current_clone = inner_clone;
+            }
         }
-
-        /* Create the next level's clone HV and link it */
-        inner_clone = newHV();
-        CLONE_STORE(inner, (SV *)inner_clone);
-        rv = newRV_noinc((SV *)inner_clone);
-        if (SvOBJECT(inner))
-            sv_bless(rv, SvSTASH(inner));
-        if (SvWEAKREF(val))
-            av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));
-        if (HeKUTF8(he)) klen = -klen;
-        hv_store(current_clone, kpv, klen, rv, HeHASH(he));
-
-        /* Advance to next level in the chain */
-        current_self = (HV *)inner;
-        current_clone = inner_clone;
     }
 
     /* General case: hash with 0 or multiple entries.
