@@ -41,6 +41,14 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
+/* If the original RV (src) is a weakref, schedule the cloned RV (rv)
+ * for deferred weakening at the end of the clone pass. */
+#define CLONE_TRACK_WEAKREF(src, rv, weakrefs)				\
+do {									\
+    if (SvWEAKREF(src))							\
+        av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));			\
+} while (0)
+
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
@@ -149,8 +157,7 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                 if (already) {
                     SV *circ_rv = newRV_inc(*already);
                     av_store(tail, 0, circ_rv);
-                    if (SvWEAKREF(current_ref))
-                        av_push(weakrefs, SvREFCNT_inc_simple_NN(circ_rv));
+                    CLONE_TRACK_WEAKREF(current_ref, circ_rv, weakrefs);
                     break;
                 }
 
@@ -168,8 +175,7 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                 {
                     SV *chain_rv = newRV_noinc((SV*)new_av);
                     av_store(tail, 0, chain_rv);
-                    if (SvWEAKREF(current_ref))
-                        av_push(weakrefs, SvREFCNT_inc_simple_NN(chain_rv));
+                    CLONE_TRACK_WEAKREF(current_ref, chain_rv, weakrefs);
                 }
                 CLONE_STORE(inner_sv, (SV*)new_av);
 
@@ -193,8 +199,7 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
                     SV *new_rv = newRV_noinc(leaf);
                     if (SvOBJECT(inner))
                         sv_bless(new_rv, SvSTASH(inner));
-                    if (SvWEAKREF(current_ref))
-                        av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+                    CLONE_TRACK_WEAKREF(current_ref, new_rv, weakrefs);
                     av_store(tail, 0, new_rv);
                 } else if (SvROK(current_ref)) {
                     av_store(tail, 0,
