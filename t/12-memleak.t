@@ -23,9 +23,13 @@ sub get_rss_kb {
         return undef;
     }
     elsif ($^O eq 'darwin') {
-        # Use list form of open with an absolute path to avoid invoking a
-        # shell: on MacPorts the build user has no valid shell configured,
-        # so backticks fail with "Can't exec 'ps': Operation not permitted".
+        # Use list form of open to avoid invoking a shell. Also redirect
+        # STDERR to /dev/null before the fork so that if the exec is blocked
+        # by a sandbox (e.g. MacPorts build user with no valid shell), the
+        # "Can't exec" message from the child is discarded instead of
+        # polluting test output. STDERR is restored when the function returns
+        # via Perl's 'local' mechanism.
+        open(local *STDERR, '>', '/dev/null') or return undef;
         open(my $ps, '-|', '/bin/ps', '-o', 'rss=', '-p', $$) or return undef;
         my $rss = <$ps>;
         close $ps;
