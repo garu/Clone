@@ -212,9 +212,9 @@ jobs:
         run: |
           cpanm --installdeps --cpanfile .github/cpanfile.test --with-develop .
           cpanm -n TAP::Formatter::GitHubActions
-      - name: Run Tests
+      - name: Build
         run: |
-          prove --merge --formatter TAP::Formatter::GitHubActions -l t
           perl Makefile.PL
           gmake
-          gmake test
+      - name: Run Tests
+        run: prove --merge --formatter TAP::Formatter::GitHubActions -b t
