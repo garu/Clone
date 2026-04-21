@@ -133,7 +133,7 @@ jobs:
           - debian:trixie
           - debian:bullseye
           - debian:bookworm
-          - ubuntu:20.04
+          - ubuntu:22.04
 
     container: ${{ matrix.os-version }}
     steps:
