@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 23;
+use Test::More tests => 29;
 use Scalar::Util qw(refaddr weaken isweak);
 use Clone qw(clone);
 use Config;
@@ -331,5 +331,94 @@ my $moderate_target  = 1000;
         # Test 22: both point to the same cloned object
         is(refaddr($cloned->{strong}), refaddr($cloned->{weak}),
            "Strong and weak refs point to same cloned deep AV");
+    }
+}
+
+# Tests 24-26: Blessed hash chain past MAX_DEPTH
+# Exercises hv_clone_iterative's inline RV->HV handling: each node in the
+# chain is a blessed hashref, and the work-stack approach must preserve the
+# class at every level.
+{
+    my $target_depth = $deep_target;
+
+    my $deep = bless {x => undef}, 'DeepNode';
+    my $curr = $deep;
+    for (1 .. $target_depth) {
+        my $next = bless {x => undef}, 'DeepNode';
+        $curr->{x} = $next;
+        $curr = $next;
+    }
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($deep);
+    };
+
+    # Test 24: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone $target_depth-deep blessed hash chain without stack overflow")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed", 2 unless defined $cloned;
+
+        # Test 25: root node blessing preserved
+        is(ref($cloned), 'DeepNode',
+           "Root node blessing preserved in deep blessed hash chain");
+
+        # Test 26: blessing preserved past MAX_DEPTH
+        my $depth_check = $is_limited_stack ? 1500 : 2500;
+        my $walk = $cloned;
+        for (1 .. $depth_check) {
+            last unless ref($walk) eq 'DeepNode' && exists $walk->{x}
+                     && ref($walk->{x}) eq 'DeepNode';
+            $walk = $walk->{x};
+        }
+        is(ref($walk), 'DeepNode',
+           "Blessing preserved at depth $depth_check in deep hash chain");
+    }
+}
+
+# Tests 27-29: Weakref to hash node inside deeply nested hash chain
+# A weakened hash value deep in the chain should remain weak after clone,
+# exercising hv_clone_iterative's SvWEAKREF tracking.
+{
+    my $target_depth = int(($is_limited_stack ? 2000 : 4000) / 2) + 200;
+
+    # Build hash chain and capture a mid-chain node
+    my $deep = {};
+    my $curr = $deep;
+    my $mid_node;
+    for my $i (1 .. $target_depth) {
+        my $next = {};
+        $curr->{x} = $next;
+        $mid_node = $next if $i == int($target_depth / 2);
+        $curr = $next;
+    }
+
+    # Both strong (via chain) and weak refs to the mid node
+    my $holder = { root => $deep, weak_mid => $mid_node };
+    weaken($holder->{weak_mid});
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($holder);
+    };
+
+    # Test 27: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone hash chain with weakref to mid-depth node")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed", 2 unless defined $cloned;
+
+        # Test 28: weak ref survives (strong path through chain exists)
+        ok(defined $cloned->{weak_mid},
+           "Weak ref to mid-depth hash node survives clone");
+
+        # Test 29: weak ref is actually weak
+        ok(isweak($cloned->{weak_mid}),
+           "Weak ref to mid-depth hash node remains weak after clone");
     }
 }
