@@ -403,26 +403,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         if (SvTYPE(ref) == SVt_PVHV) {
             return hv_clone_iterative(ref, hseen, rdepth, weakrefs);
         }
-        /* For RVs pointing to AVs, follow the reference and use the
-         * iterative path -- this is the common case for [[[...]]] */
-        if (SvROK(ref) && SvTYPE(SvRV(ref)) == SVt_PVAV) {
-            SV *clone_av = av_clone_iterative(SvRV(ref), hseen, rdepth, weakrefs);
-            SV *clone_rv = newRV_noinc(clone_av);
-            if (SvOBJECT(SvRV(ref)))
-                sv_bless(clone_rv, SvSTASH(SvRV(ref)));
-            return clone_rv;
-        }
-        /* For RVs pointing to HVs, use the iterative hash path */
-        if (SvROK(ref) && SvTYPE(SvRV(ref)) == SVt_PVHV) {
-            SV *clone_hv = hv_clone_iterative(SvRV(ref), hseen, rdepth, weakrefs);
-            SV *clone_rv = newRV_noinc(clone_hv);
-            if (SvOBJECT(SvRV(ref)))
-                sv_bless(clone_rv, SvSTASH(SvRV(ref)));
-            return clone_rv;
-        }
-        /* For other RV types (e.g. deeply nested scalar refs), unroll the
-         * chain iteratively to produce a true deep copy.  This prevents the
-         * "shared alias" vulnerability described in GH #107. */
+        /* All RV types (AV, HV, scalar-ref chains) are handled uniformly
+         * by rv_clone_iterative, which walks the reference chain, dispatches
+         * to av_clone_iterative/hv_clone_iterative for container referents,
+         * and properly preserves blessings and SvWEAKREF flags.
+         * (The AV/HV cases were previously inlined here but lacked weakref
+         * handling — see GH #107, #116, #119 for the iterative gap pattern.) */
         if (SvROK(ref))
             return rv_clone_iterative(ref, hseen, rdepth, weakrefs);
         /* Simple scalars (non-reference, non-container) can always be

@@ -2,8 +2,8 @@
 
 use strict;
 use warnings;
-use Test::More tests => 18;
-use Scalar::Util qw(refaddr);
+use Test::More tests => 23;
+use Scalar::Util qw(refaddr weaken isweak);
 use Clone qw(clone);
 use Config;
 
@@ -277,4 +277,59 @@ my $moderate_target  = 1000;
     # Test 17: $Clone::WARN = 0 must not cause errors (regression guard)
     my $ok = eval { local $Clone::WARN = 0; clone($deep); 1 };
     ok($ok, "\$Clone::WARN = 0 must not cause errors when cloning deep scalar refs");
+}
+
+# Tests 18-23: Weakref preservation past MAX_DEPTH for RV-to-AV and RV-to-HV
+# Before consolidation into rv_clone_iterative, the MAX_DEPTH handler for
+# RV-to-AV and RV-to-HV created wrapper RVs without checking SvWEAKREF,
+# silently converting weak references into strong ones.
+{
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+
+    # Build a deeply nested AV that exceeds MAX_DEPTH/2 nesting levels.
+    # Then create a structure where a weak ref points to an inner node.
+    my $target_depth = int($max_depth_val / 2) + 200;
+
+    # Create the deep array chain
+    my $deep_av = [];
+    my $curr = $deep_av;
+    for (1 .. $target_depth) {
+        my $next = [];
+        $curr->[0] = $next;
+        $curr = $next;
+    }
+
+    # Create a structure with both strong and weak refs to the deep array
+    my $holder = { strong => $deep_av, weak => $deep_av };
+    weaken($holder->{weak});
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($holder);
+    };
+
+    # Test 18: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone structure with weak ref to deeply nested AV")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed", 4 unless defined $cloned;
+
+        # Test 19: weak ref survives (strong ref exists in clone graph)
+        ok(defined $cloned->{weak},
+           "Weak ref to deep AV survives when strong ref exists in clone");
+
+        # Test 20: weak ref is actually weak
+        ok(isweak($cloned->{weak}),
+           "Weak ref to deep AV past MAX_DEPTH remains weak after clone");
+
+        # Test 21: strong ref is not weak
+        ok(!isweak($cloned->{strong}),
+           "Strong ref to deep AV past MAX_DEPTH remains strong");
+
+        # Test 22: both point to the same cloned object
+        is(refaddr($cloned->{strong}), refaddr($cloned->{weak}),
+           "Strong and weak refs point to same cloned deep AV");
+    }
 }
