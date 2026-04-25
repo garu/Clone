@@ -218,16 +218,29 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 }
 
 /* Iterative hash clone for use when rdepth exceeds MAX_DEPTH.
- * Mirrors av_clone_iterative: creates a new HV, registers it in hseen for
- * circular-ref safety, then clones each value via sv_clone (which will
- * re-enter this function for any nested HVs still above MAX_DEPTH). */
+ *
+ * Unlike the earlier recursive implementation, this uses a heap-based
+ * work stack to avoid C stack overflow on deeply nested hash-of-hash
+ * structures.  Values that are RV->HV are handled inline: the inner
+ * HV clone is created, registered in hseen, and pushed onto the work
+ * stack for deferred key iteration -- instead of recursing through
+ * sv_clone -> rv_clone_iterative -> hv_clone_iterative (3 C frames
+ * per nesting level).  Non RV->HV values still delegate to sv_clone.
+ *
+ * The work stack stores (source_HV, clone_HV) pairs and processes
+ * them in LIFO order (depth-first).  For single-key hash chains
+ * {k => \{k => \{...}}}, the stack depth stays at 1 regardless of
+ * chain length.  See GH #93, #121 for iterative hash cloning history. */
 static SV *
 hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
+    SV **work;
+    I32 work_len;
+    I32 work_max;
     HV *self;
     HV *root_clone;
-    SV **seen = NULL;
-    HE *next = NULL;
+    SV **seen;
+    HE *entry;
 
     if (!ref) return NULL;
 
@@ -241,22 +254,93 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     root_clone = newHV();
     CLONE_STORE(ref, (SV *)root_clone);
 
-    /* Pre-size to avoid incremental resizing */
-    if (HvKEYS(self) > 0)
-        hv_ksplit(root_clone, HvKEYS(self));
+    work_max = 64;
+    work_len = 0;
+    Newx(work, work_max * 2, SV *);
 
-    /* Clone each value; sv_clone will use the iterative path again for any
-     * nested structures that are still above MAX_DEPTH. */
-    hv_iterinit(self);
-    while ((next = hv_iternext(self))) {
-        I32 klen;
-        char *kpv = hv_iterkey(next, &klen);
-        SV *val = sv_clone(hv_iterval(self, next), hseen, 1, rdepth, weakrefs);
-        if (HeKUTF8(next))
-            klen = -klen;
-        hv_store(root_clone, kpv, klen, val, HeHASH(next));
+    work[0] = (SV *)self;
+    work[1] = (SV *)root_clone;
+    work_len = 1;
+
+    while (work_len > 0) {
+        HV *src;
+        HV *dst;
+
+        work_len--;
+        src = (HV *)work[work_len * 2];
+        dst = (HV *)work[work_len * 2 + 1];
+
+        /* Pre-size to avoid incremental resizing */
+        if (HvKEYS(src) > 0)
+            hv_ksplit(dst, HvKEYS(src));
+
+        hv_iterinit(src);
+        while ((entry = hv_iternext(src))) {
+            I32 klen;
+            char *kpv;
+            SV *val;
+
+            kpv = hv_iterkey(entry, &klen);
+            val = hv_iterval(src, entry);
+
+            if (HeKUTF8(entry))
+                klen = -klen;
+
+            /* Inline RV->HV handling: create the clone HV and RV wrapper
+             * here, then push the inner HV pair for deferred processing.
+             * This avoids the sv_clone -> rv_clone_iterative ->
+             * hv_clone_iterative recursion (~3 C stack frames per level). */
+            if (SvROK(val) && SvTYPE(SvRV(val)) == SVt_PVHV) {
+                SV *inner;
+                SV **already;
+                SV *new_rv;
+
+                inner = SvRV(val);
+                already = CLONE_FETCH(inner);
+
+                if (already) {
+                    new_rv = newRV_inc(*already);
+                } else {
+                    HV *new_hv;
+
+                    new_hv = newHV();
+                    CLONE_STORE(inner, (SV *)new_hv);
+
+                    /* Preserve blessing on the HV */
+                    if (SvOBJECT(inner)) {
+                        SV *tmp = newRV((SV *)new_hv);
+                        sv_bless(tmp, SvSTASH(inner));
+                        SvREFCNT_dec(tmp);
+                    }
+
+                    new_rv = newRV_noinc((SV *)new_hv);
+
+                    /* Push (source, clone) pair for deferred key iteration */
+                    if (work_len >= work_max) {
+                        work_max *= 2;
+                        Renew(work, work_max * 2, SV *);
+                    }
+                    work[work_len * 2] = inner;
+                    work[work_len * 2 + 1] = (SV *)new_hv;
+                    work_len++;
+                }
+
+                /* Defer weakening: track weakrefs for post-clone pass */
+                if (SvWEAKREF(val))
+                    av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+
+                hv_store(dst, kpv, klen, new_rv, HeHASH(entry));
+                continue;
+            }
+
+            /* All other value types: delegate to sv_clone */
+            hv_store(dst, kpv, klen,
+                     sv_clone(val, hseen, 1, rdepth, weakrefs),
+                     HeHASH(entry));
+        }
     }
 
+    Safefree(work);
     return (SV *)root_clone;
 }
 
