@@ -266,7 +266,12 @@ hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
  *
  * This mirrors av_clone_iterative/hv_clone_iterative: instead of returning
  * SvREFCNT_inc(ref) (a shared alias), it produces a true deep copy of the
- * entire scalar-ref chain, preserving isolation. (GH #107) */
+ * entire scalar-ref chain, preserving isolation. (GH #107)
+ *
+ * Cycle safety: circular RV chains (e.g. $a = \$b; $b = \$a) embedded
+ * past MAX_DEPTH are detected during the walk phase.  Each clone is
+ * registered in hseen immediately during rebuild, so shared references
+ * at depth > MAX_DEPTH are also handled correctly. */
 static SV *
 rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
@@ -278,16 +283,38 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     SV *result;
     SV **seen;
     I32 i;
+    I32 cycle_target;
 
     if (!ref || !SvROK(ref)) return NULL;
 
+    /* If already cloned (e.g. via a different path), return cached copy.
+     * This mirrors the CLONE_FETCH guard in av_clone_iterative and
+     * hv_clone_iterative. */
+    if ((seen = CLONE_FETCH(ref)))
+        return SvREFCNT_inc(*seen);
+
     chain_max = 64;
     chain_len = 0;
+    cycle_target = -1;
     Newx(chain, chain_max, SV *);
 
-    /* Walk the RV chain, collecting each node until we reach a non-RV leaf */
+    /* Walk the RV chain, collecting each node until we reach a non-RV
+     * leaf, find an already-cloned node, or detect a cycle. */
     current = ref;
     while (current && SvROK(current)) {
+        /* Check if already cloned by another code path */
+        if ((seen = CLONE_FETCH(current))) {
+            leaf_clone = SvREFCNT_inc(*seen);
+            goto rebuild;
+        }
+        /* Check for cycle within this walk (linear scan — cycle lengths
+         * are typically 2-4, so this is cheaper than a hash lookup) */
+        for (i = 0; i < chain_len; i++) {
+            if (chain[i] == current) {
+                cycle_target = i;
+                goto handle_cycle;
+            }
+        }
         if (chain_len >= chain_max) {
             chain_max *= 2;
             Renew(chain, chain_max, SV *);
@@ -320,7 +347,9 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         return SvREFCNT_inc(ref);
     }
 
-    /* Rebuild the RV chain from the bottom up */
+rebuild:
+    /* Rebuild the RV chain from the bottom up, registering each clone
+     * in hseen so shared references are preserved correctly. */
     result = leaf_clone;
     for (i = chain_len - 1; i >= 0; i--) {
         SV *rv = chain[i];
@@ -329,11 +358,84 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
             sv_bless(new_rv, SvSTASH(SvRV(rv)));
         if (SvWEAKREF(rv))
             av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+        CLONE_STORE(rv, new_rv);
         result = new_rv;
     }
 
     Safefree(chain);
     return result;
+
+handle_cycle:
+    /* Circular RV chain detected: chain[cycle_target..chain_len-1]
+     * forms the cycle, with current == chain[cycle_target].
+     *
+     * Build the cycle from inside-out with a placeholder for the
+     * back-reference, then close the cycle and build any non-cyclic
+     * prefix above it.
+     *
+     * Example: chain=[A,B,C], C->A cycle (cycle_target=0):
+     *   C' = newRV(placeholder)
+     *   B' = newRV(C')
+     *   A' = newRV(B')
+     *   fix: SvRV(C') = A'  (close cycle)
+     */
+    {
+        SV *cycle_head;
+        SV *cycle_tail;
+        SV *placeholder;
+
+        /* Build the cycle portion bottom-up.  The tail (last node before
+         * the back-edge) gets a temporary placeholder referent. */
+        placeholder = newSV(0);
+        result = placeholder;
+        cycle_tail = NULL;
+
+        for (i = chain_len - 1; i >= cycle_target; i--) {
+            SV *rv = chain[i];
+            SV *new_rv = newRV_noinc(result);
+            if (SvWEAKREF(rv))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+            CLONE_STORE(rv, new_rv);
+            if (!cycle_tail)
+                cycle_tail = new_rv;
+            result = new_rv;
+        }
+        cycle_head = result;
+
+        /* Close the cycle: replace the placeholder with the cycle head.
+         * This gives us e.g. A'->B'->C'->A' (same topology as original). */
+        assert(cycle_tail != NULL);
+        SvREFCNT_dec(SvRV(cycle_tail));
+        SvRV(cycle_tail) = SvREFCNT_inc(cycle_head);
+
+        /* Now that all referents are in place, apply blessings.
+         * We deferred this because the cycle tail's referent was a
+         * placeholder during construction. */
+        for (i = chain_len - 1; i >= cycle_target; i--) {
+            SV *rv = chain[i];
+            if (SvOBJECT(SvRV(rv))) {
+                SV **entry = CLONE_FETCH(rv);
+                if (entry)
+                    sv_bless(*entry, SvSTASH(SvRV(rv)));
+            }
+        }
+
+        /* Build any non-cyclic prefix above the cycle */
+        result = cycle_head;
+        for (i = cycle_target - 1; i >= 0; i--) {
+            SV *rv = chain[i];
+            SV *new_rv = newRV_noinc(result);
+            if (SvOBJECT(SvRV(rv)))
+                sv_bless(new_rv, SvSTASH(SvRV(rv)));
+            if (SvWEAKREF(rv))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+            CLONE_STORE(rv, new_rv);
+            result = new_rv;
+        }
+
+        Safefree(chain);
+        return result;
+    }
 }
 
 static SV *
