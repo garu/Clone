@@ -322,9 +322,30 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
             if (seen) {
                 leaf_clone = SvREFCNT_inc(*seen);
             } else {
-                leaf_clone = newSVsv(current);
-                if ((SvREFCNT(current) > 1) || SvMAGICAL(current))
-                    CLONE_STORE(current, leaf_clone);
+                /* Mirror the non-cloneable cases from the regular sv_clone
+                 * switch (PVCV/PVGV/PVFM/PVIO/PVLV/REGEXP/BM): newSVsv()
+                 * croaks on these ("Bizarre copy of CODE in subroutine
+                 * entry") or stringifies them.  Share via SvREFCNT_inc
+                 * instead. */
+                switch (SvTYPE(current)) {
+#if PERL_VERSION <= 8
+                    case SVt_PVBM:	/* 8 */
+#elif PERL_VERSION >= 11
+                    case SVt_REGEXP:	/* 8 */
+#endif
+                    case SVt_PVLV:	/* 9 */
+                    case SVt_PVCV:	/* 12 */
+                    case SVt_PVGV:	/* 13 */
+                    case SVt_PVFM:	/* 14 */
+                    case SVt_PVIO:	/* 15 */
+                        leaf_clone = SvREFCNT_inc(current);
+                        break;
+                    default:
+                        leaf_clone = newSVsv(current);
+                        if ((SvREFCNT(current) > 1) || SvMAGICAL(current))
+                            CLONE_STORE(current, leaf_clone);
+                        break;
+                }
             }
         }
     }
