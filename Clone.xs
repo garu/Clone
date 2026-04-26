@@ -285,20 +285,34 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     chain_len = 0;
     Newx(chain, chain_max, SV *);
 
-    /* Walk the RV chain, collecting each node until we reach a non-RV leaf */
+    /* Walk the RV chain, collecting each node until we reach a non-RV leaf
+     * or a referent that has already been cloned (cycle / sharing).
+     *
+     * Cycle guard: a chain reachable only past MAX_DEPTH (so the recursive
+     * sv_clone path never had a chance to register it in hseen) can still
+     * fold back on itself.  Without this check, SvRV(current) cycles forever
+     * and chain[] grows unbounded via Renew() until allocation aborts. */
+    leaf_clone = NULL;
     current = ref;
     while (current && SvROK(current)) {
+        SV *referent = SvRV(current);
+        SV **already = referent ? CLONE_FETCH(referent) : NULL;
+        if (already) {
+            /* Stop walking; the cached clone is our leaf. */
+            leaf_clone = SvREFCNT_inc(*already);
+            break;
+        }
         if (chain_len >= chain_max) {
             chain_max *= 2;
             Renew(chain, chain_max, SV *);
         }
         chain[chain_len++] = current;
-        current = SvRV(current);
+        current = referent;
     }
 
-    /* current is now the non-RV leaf; clone it based on its type */
-    leaf_clone = NULL;
-    if (current) {
+    /* If we did not hit a cached referent above, current is now the non-RV
+     * leaf; clone it based on its type. */
+    if (!leaf_clone && current) {
         if (SvTYPE(current) == SVt_PVAV) {
             leaf_clone = av_clone_iterative(current, hseen, rdepth, weakrefs);
         } else if (SvTYPE(current) == SVt_PVHV) {
