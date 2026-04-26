@@ -19,7 +19,7 @@ use Scalar::Util qw(refaddr blessed);
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $deep_target = $is_limited_stack ? 2500 : 5000;
 
-plan tests => 7;
+plan tests => 9;
 
 # Test 1-3: deeply nested blessed arrayrefs preserve class
 {
@@ -101,7 +101,37 @@ plan tests => 7;
     }
 }
 
-# Test 6-7: clone isolation — modifying cloned blessed node does not affect original
+# Test 6-7: blessed multi-element AV at the bottom of a single-element chain.
+# The chain-walk loop only processes single-element AVs and hands the
+# terminator to a separate fallback. That fallback wrapped the cloned AV
+# in newRV_noinc() without re-applying the blessing, so a blessed
+# multi-element terminator lost its class.
+{
+    my $multi = bless [10, 20, 30], 'Multi::Class';
+    my $r = $multi;
+    for (1 .. $deep_target) {
+        $r = [$r];
+    }
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($r);
+    };
+
+    SKIP: {
+        skip 'clone failed', 2 unless defined $cloned;
+
+        my $w = $cloned;
+        $w = $w->[0] while ref($w) eq 'ARRAY' && @$w == 1;
+
+        is(blessed($w), 'Multi::Class',
+           'multi-element AV terminator preserves blessing through chain walk');
+        is(scalar(@$w), 3,
+           'multi-element AV terminator preserves element count');
+    }
+}
+
+# Test 8-9: clone isolation — modifying cloned blessed node does not affect original
 {
     my $bottom = bless ['sentinel'], 'Leaf';
     my $curr = $bottom;

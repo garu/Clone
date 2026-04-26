@@ -176,10 +176,16 @@ av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
             if (current_ref) {
                 if (SvROK(current_ref) &&
                     SvTYPE(SvRV(current_ref)) == SVt_PVAV) {
-                    /* Final AV — clone it iteratively too */
-                    SV *leaf = av_clone_iterative(SvRV(current_ref),
-                                                  hseen, rdepth, weakrefs);
-                    av_store(tail, 0, newRV_noinc(leaf));
+                    /* Final AV — clone it iteratively too.  Re-apply the
+                     * original referent's blessing on the wrapping RV so
+                     * a blessed multi-element terminator does not lose
+                     * its class (mirrors the in-loop logic above). */
+                    SV *inner = SvRV(current_ref);
+                    SV *leaf = av_clone_iterative(inner, hseen, rdepth, weakrefs);
+                    SV *new_rv = newRV_noinc(leaf);
+                    if (SvOBJECT(inner))
+                        sv_bless(new_rv, SvSTASH(inner));
+                    av_store(tail, 0, new_rv);
                 } else if (SvROK(current_ref)) {
                     av_store(tail, 0,
                              sv_clone(current_ref, hseen, 1, rdepth, weakrefs));
