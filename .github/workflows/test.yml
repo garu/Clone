@@ -31,7 +31,7 @@ jobs:
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: sudo apt-get update && sudo apt-get install -y libgmp-dev
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false
@@ -103,14 +103,8 @@ jobs:
       - run: perl -V
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: apt-get update && apt-get install -y libgmp-dev
-      - name: install deps using cpanm
-        uses: perl-actions/install-with-cpm@v1
-        with:
-          sudo: false
-          cpanfile: ".github/cpanfile.test"
-          args: "--with-all"
-      - name: Set PERL5LIB to local lib
-        run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
+      - name: install deps using cpm
+        run: cpm install --show-build-log-on-failure --no-test -g --cpanfile .github/cpanfile.test --with-all
       - run: perl Makefile.PL
       - run: make
       - run: make test
@@ -145,7 +139,7 @@ jobs:
           (yum install --skip-broken -y openssl perl make gcc sudo curl gmp-devel)
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
             sudo: false
             cpanfile: ".github/cpanfile.test"
@@ -175,7 +169,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false

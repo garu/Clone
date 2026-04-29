@@ -35,6 +35,7 @@ t/24-deep-leaf-isolation.t
 t/25-iterative-bless.t
 t/26-rv-iterative-cycle.t
 t/27-rv-iterative-noncloneable.t
+t/28-deep-hash-chain.t
 t/dclone.t
 t/dump.pl
 t/tied.pl

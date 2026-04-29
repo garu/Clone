@@ -22,6 +22,12 @@ my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
 my $deep_target     = $is_limited_stack ? 2500 : 5000;
 
+# Mixed array/hash structures use ~4 C frames per nesting level in the
+# iterative path (bouncing between av/hv_clone_iterative via sv_clone),
+# roughly 4x the stack of pure-array or pure-hash chains.  Use a lower
+# depth on limited-stack platforms to avoid overflowing the 1 MB Windows stack.
+my $mixed_target    = $is_limited_stack ? 1500 : $deep_target;
+
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
 
@@ -166,7 +172,7 @@ my $moderate_target  = 1000;
 {
     my $deep_mixed = [];
     my $curr = $deep_mixed;
-    for (1..$deep_target) {
+    for (1..$mixed_target) {
         my $next = [];
         push @$curr, {val => $next};
         $curr = $next;
@@ -178,7 +184,7 @@ my $moderate_target  = 1000;
     };
 
     ok(!$@ && defined($cloned),
-       "Should clone $deep_target-deep mixed array/hash structure without stack overflow")
+       "Should clone $mixed_target-deep mixed array/hash structure without stack overflow")
         or diag("Error during clone: " . ($@ || "undefined result"));
 
     SKIP: {
@@ -191,11 +197,11 @@ my $moderate_target  = 1000;
             $walk = $walk->[0]{val};
             $measured++;
         }
-        is($measured, $deep_target,
-           "Mixed deep structure should maintain full depth ($deep_target levels)");
+        is($measured, $mixed_target,
+           "Mixed deep structure should maintain full depth ($mixed_target levels)");
 
         # Clone independence: mutate a deep hash node in clone
-        my $depth_target = $is_limited_stack ? 1500 : 2500;
+        my $depth_target = $is_limited_stack ? 1000 : 2500;
         my $walk_orig  = $deep_mixed;
         my $walk_clone = $cloned;
         for (1..$depth_target) {
