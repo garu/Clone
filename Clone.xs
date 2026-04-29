@@ -45,8 +45,8 @@ do {									\
  * for deferred weakening at the end of the clone pass. */
 #define CLONE_TRACK_WEAKREF(src, rv, weakrefs)				\
 do {									\
-    if (SvWEAKREF(src))							\
-        av_push(weakrefs, SvREFCNT_inc_simple_NN(rv));			\
+    if (SvWEAKREF((src)))						\
+        av_push((weakrefs), SvREFCNT_inc_simple_NN((rv)));		\
 } while (0)
 
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
