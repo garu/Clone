@@ -104,7 +104,7 @@ jobs:
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: apt-get update && apt-get install -y libgmp-dev
       - name: install deps using cpanm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpanm@v1
         with:
           sudo: false
           cpanfile: ".github/cpanfile.test"
