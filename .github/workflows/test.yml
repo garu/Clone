@@ -31,7 +31,7 @@ jobs:
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: sudo apt-get update && sudo apt-get install -y libgmp-dev
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false
@@ -104,7 +104,7 @@ jobs:
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: apt-get update && apt-get install -y libgmp-dev
       - name: install deps using cpanm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           cpanfile: ".github/cpanfile.test"
@@ -145,7 +145,7 @@ jobs:
           (yum install --skip-broken -y openssl perl make gcc sudo curl gmp-devel)
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
             sudo: false
             cpanfile: ".github/cpanfile.test"
@@ -175,7 +175,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: perl -V
       - name: install deps using cpm
-        uses: perl-actions/install-with-cpm@v1
+        uses: perl-actions/install-with-cpm@v2
         with:
           sudo: false
           global: false
