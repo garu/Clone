@@ -628,10 +628,10 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
     I32 i;
     int recur;
 
-    /* For very deep structures, use the iterative approach */
-    if (depth == 0) {
-        return clone_container_iterative(ref, hseen, rdepth, weakrefs);
-    }
+    /* Note: depth is always > 0 here.  sv_clone() returns SvREFCNT_inc(ref)
+     * when depth == 0 (line ~752), so av_clone is never reached with depth 0.
+     * Deep structures past MAX_DEPTH are handled by clone_container_iterative
+     * via the rdepth > MAX_DEPTH guard in sv_clone (line ~680). */
 
     clone = (AV *) target;
     self = (AV *) ref;
