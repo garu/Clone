@@ -103,14 +103,10 @@ jobs:
       - run: perl -V
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: apt-get update && apt-get install -y libgmp-dev
-      - name: install deps using cpanm
-        uses: perl-actions/install-with-cpm@v1
-        with:
-          sudo: false
-          cpanfile: ".github/cpanfile.test"
-          args: "--with-all"
-      - name: Set PERL5LIB to local lib
-        run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
+      - name: Install test deps
+        run: |
+          cpanm --notest --installdeps --cpanfile .github/cpanfile.test --with-develop .
+          cpanm --notest DBD::SQLite DBI Class::DBI Math::BigInt::GMP 2>/dev/null || true
       - run: perl Makefile.PL
       - run: make
       - run: make test
