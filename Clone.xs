@@ -677,6 +677,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
       {
         SV *obj = (SV *) NULL;
+        int obj_cloned = 0;
         TRACEME(("magic type: %c\n", mg->mg_type));
 
         /* PERL_MAGIC_ext: opaque XS data, handle before the mg_obj check
@@ -739,6 +740,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 	      /* fall through */
             default:
               obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
+              obj_cloned = 1;
           }
         } else {
           TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
@@ -771,6 +773,13 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
                    mg_ptr,
                    mg->mg_len);
 
+          /* sv_magic() takes its own SvREFCNT_inc on obj (when non-NULL
+           * and obj != clone).  If obj was returned by sv_clone() above,
+           * the caller holds an extra reference that must be released;
+           * otherwise the cloned mg_obj leaks one refcount per clone
+           * (DESTROY never fires on the cloned tie object). */
+          if (obj_cloned)
+            SvREFCNT_dec(obj);
         }
       }
       /* Null the qr vtable -- avoid mg_find traversal if we already know */
