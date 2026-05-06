@@ -432,6 +432,16 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
     rdepth++;
 
+    /* depth == 0 means "share, don't clone" — honour this before
+     * the MAX_DEPTH iterative fallback.  rdepth counts total sv_clone
+     * calls (including sibling elements in flat arrays/hashes), so a
+     * wide structure like a 5000-element array can push rdepth past
+     * MAX_DEPTH even at shallow nesting.  Without this early check,
+     * elements beyond ~MAX_DEPTH would be deep-copied instead of
+     * shared when the caller requested depth 0. */
+    if (depth == 0)
+        return SvREFCNT_inc(ref);
+
     /* Check for deep recursion and switch to iterative mode.
      * A deeply nested arrayref like [[[...]]] alternates between RV and AV
      * at each level, consuming ~3 C stack frames per nesting level.
@@ -511,9 +521,6 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
           || (SvTYPE(ref) == SVt_PVHV && SvOOK(ref));
 
   TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
-
-  if (depth == 0)
-    return SvREFCNT_inc(ref);
 
   if (visible && (seen = CLONE_FETCH(ref)))
     {
