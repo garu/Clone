@@ -326,6 +326,14 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         /* Check if the referent was already cloned */
         already = referent ? CLONE_FETCH(referent) : NULL;
         if (already) {
+            /* Record this RV in chain so rebuild wraps it properly.
+             * Without this, the rebuild loop has no entries and returns
+             * the bare referent clone instead of an RV to it. */
+            if (chain_len >= chain_max) {
+                chain_max *= 2;
+                Renew(chain, chain_max, SV *);
+            }
+            chain[chain_len++] = current;
             leaf_clone = SvREFCNT_inc(*already);
             break;
         }
