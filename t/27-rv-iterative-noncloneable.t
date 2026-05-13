@@ -12,7 +12,7 @@ use Clone qw(clone);
 # PVCV/PVGV/PVFM/PVIO branch).
 
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
-my $max_depth_val    = $is_limited_stack ? 2000 : 4000;
+my $max_depth_val    = $is_limited_stack ? 1000 : 2000;
 my $chain_len        = $max_depth_val + 1000;
 
 plan tests => 4;

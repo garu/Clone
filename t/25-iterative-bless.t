@@ -15,7 +15,7 @@ use Clone qw(clone);
 use Scalar::Util qw(refaddr blessed);
 
 # Platform-adaptive depth (mirrors t/10-deep_recursion.t).
-# Must exceed MAX_DEPTH/2 to exercise the iterative path.
+# Must exceed MAX_DEPTH to exercise the iterative path.
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $deep_target = $is_limited_stack ? 2500 : 5000;
 
