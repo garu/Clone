@@ -15,9 +15,9 @@ use Scalar::Util qw(refaddr);
 # original shared the same leaf SVs.  Mutations through a reference
 # to the clone's leaf value would corrupt the original.
 
-# Platform-adaptive depth: MAX_DEPTH is 2000 on Windows/Cygwin, 4000 elsewhere.
-# Each hash nesting level costs ~2 rdepth (RV + HV), so we need > MAX_DEPTH/2
-# levels to trigger the iterative path.
+# Platform-adaptive depth: MAX_DEPTH is 1000 on Windows/Cygwin, 2000 elsewhere.
+# Each hash nesting level costs 1 rdepth (one RV dereference), so we need
+# > MAX_DEPTH levels to trigger the iterative path.
 my $is_limited = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $depth      = $is_limited ? 1200 : 2200;
 
