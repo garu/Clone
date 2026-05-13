@@ -369,7 +369,10 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
         SV *placeholder;
 
         if ((already = CLONE_FETCH(current))) {
-            /* Cycle, or an RV shared with somewhere already cloned. */
+            /* Cycle, or an RV shared with somewhere already cloned.  The
+             * link above this one is already in chain[] (pushed before we
+             * descended), so the rebuild still wraps this clone in an RV
+             * rather than handing back the bare referent. */
             leaf_clone = SvREFCNT_inc(*already);
             break;
         }
