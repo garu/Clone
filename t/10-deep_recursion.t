@@ -22,6 +22,11 @@ my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
 my $deep_target     = $is_limited_stack ? 2500 : 5000;
 
+# Mixed structures (AV→HV→AV→HV...) consume ~2x stack per level during
+# Perl's recursive SvREFCNT_dec destruction compared to pure-array chains.
+# 2500 mixed levels overflows Windows' 1 MB stack.  1250 is safe.
+my $mixed_target    = $is_limited_stack ? 1250 : 5000;
+
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
 
@@ -166,7 +171,7 @@ my $moderate_target  = 1000;
 {
     my $deep_mixed = [];
     my $curr = $deep_mixed;
-    for (1..$deep_target) {
+    for (1..$mixed_target) {
         my $next = [];
         push @$curr, {val => $next};
         $curr = $next;
@@ -178,7 +183,7 @@ my $moderate_target  = 1000;
     };
 
     ok(!$@ && defined($cloned),
-       "Should clone $deep_target-deep mixed array/hash structure without stack overflow")
+       "Should clone $mixed_target-deep mixed array/hash structure without stack overflow")
         or diag("Error during clone: " . ($@ || "undefined result"));
 
     SKIP: {
@@ -191,11 +196,11 @@ my $moderate_target  = 1000;
             $walk = $walk->[0]{val};
             $measured++;
         }
-        is($measured, $deep_target,
-           "Mixed deep structure should maintain full depth ($deep_target levels)");
+        is($measured, $mixed_target,
+           "Mixed deep structure should maintain full depth ($mixed_target levels)");
 
         # Clone independence: mutate a deep hash node in clone
-        my $depth_target = $is_limited_stack ? 1500 : 2500;
+        my $depth_target = $is_limited_stack ? 500 : 2500;
         my $walk_orig  = $deep_mixed;
         my $walk_clone = $cloned;
         for (1..$depth_target) {
@@ -204,7 +209,7 @@ my $moderate_target  = 1000;
         }
         $walk_clone->[0]{_sentinel} = "mutation";
         ok(!exists $walk_orig->[0]{_sentinel},
-           "Mutating clone hash at depth $depth_target should not affect original");
+               "Mutating clone hash at depth $depth_target should not affect original");
     }
 }
 
