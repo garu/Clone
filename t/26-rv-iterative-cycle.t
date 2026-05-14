@@ -29,10 +29,13 @@ sub build_cyclic_chain {
         $slots[$i] = $r;                       # slot i holds previous RV
         $r = \$slots[$i];                      # RV -> slot i
     }
-    # Close the cycle deep in the chain: slot 0 now points back into slot N/2.
-    # Walking SvRV from $r eventually reaches slot 0, which now resolves to
-    # slot N/2, looping forever absent a cycle guard.
-    $slots[0] = \$slots[ int($chain_len / 2) ];
+    # Close the cycle: slot 0 points back into the upper quarter of the
+    # chain.  The target must sit in the recursive range (processed by
+    # sv_clone before rdepth exceeds MAX_DEPTH) so that hseen already
+    # contains it when rv_clone_iterative walks into the back-edge.
+    # 3/4 of chain_len is safely above MAX_DEPTH from the bottom on
+    # all platforms.
+    $slots[0] = \$slots[ int($chain_len * 3 / 4) ];
     return ($r, \@slots);  # return @slots too so it stays alive
 }
 
