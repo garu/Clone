@@ -287,6 +287,17 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 
     if (!ref || !SvROK(ref)) return NULL;
 
+    /* Return cached clone if this RV was already cloned (e.g., via a
+     * shallower recursive path that stored it in hseen).  Without this,
+     * a shared RV reachable from both shallow and deep (>MAX_DEPTH) paths
+     * gets cloned twice, breaking identity preservation.  Mirrors the
+     * CLONE_FETCH at entry of av_clone_iterative / hv_clone_iterative. */
+    if ((SvREFCNT(ref) > 1) || SvMAGICAL(ref)) {
+        seen = CLONE_FETCH(ref);
+        if (seen)
+            return SvREFCNT_inc(*seen);
+    }
+
     chain_max = 64;
     chain_len = 0;
     Newx(chain, chain_max, SV *);
@@ -294,25 +305,29 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     /* Walk the RV chain, collecting each node until we reach a non-RV leaf
      * or a referent that has already been cloned (cycle / sharing).
      *
-     * Cycle guard: a chain reachable only past MAX_DEPTH (so the recursive
-     * sv_clone path never had a chance to register it in hseen) can still
-     * fold back on itself.  Without this check, SvRV(current) cycles forever
-     * and chain[] grows unbounded via Renew() until allocation aborts. */
+     * IMPORTANT: each RV node is added to chain[] BEFORE checking whether
+     * its referent is cached.  When a cached referent is found, the walk
+     * stops — but the wrapping RV must still be in the chain so the
+     * rebuild creates a proper RV->referent_clone structure.  Without
+     * this ordering, a cached referent is returned bare (unwrapped),
+     * causing "Bizarre copy of HASH/ARRAY" crashes when the caller
+     * expects an RV. */
     leaf_clone = NULL;
     current = ref;
     while (current && SvROK(current)) {
         SV *referent = SvRV(current);
-        SV **already = referent ? CLONE_FETCH(referent) : NULL;
-        if (already) {
-            /* Stop walking; the cached clone is our leaf. */
-            leaf_clone = SvREFCNT_inc(*already);
-            break;
-        }
+        SV **already;
         if (chain_len >= chain_max) {
             chain_max *= 2;
             Renew(chain, chain_max, SV *);
         }
         chain[chain_len++] = current;
+        already = referent ? CLONE_FETCH(referent) : NULL;
+        if (already) {
+            /* Stop walking; the cached clone is our leaf. */
+            leaf_clone = SvREFCNT_inc(*already);
+            break;
+        }
         current = referent;
     }
 
@@ -372,6 +387,11 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
             av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
         result = new_rv;
     }
+
+    /* Store the result so subsequent visits to this RV reuse it,
+     * preserving identity across paths that share the same RV. */
+    if ((SvREFCNT(ref) > 1) || SvMAGICAL(ref))
+        CLONE_STORE(ref, result);
 
     Safefree(chain);
     return result;

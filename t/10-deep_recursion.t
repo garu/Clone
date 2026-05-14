@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 23;
+use Test::More tests => 33;
 use Scalar::Util qw(refaddr weaken isweak);
 use Clone qw(clone);
 use Config;
@@ -21,6 +21,11 @@ use Config;
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
 my $deep_target     = $is_limited_stack ? 2500 : 5000;
+
+# Mixed structures (AV→HV→AV→HV...) consume ~2x stack per level during
+# Perl's recursive SvREFCNT_dec destruction compared to pure-array chains.
+# 2500 mixed levels overflows Windows' 1 MB stack.  1250 is safe.
+my $mixed_target    = $is_limited_stack ? 1250 : 5000;
 
 # Moderate depth used for basic tests (safe everywhere).
 my $moderate_target  = 1000;
@@ -166,7 +171,7 @@ my $moderate_target  = 1000;
 {
     my $deep_mixed = [];
     my $curr = $deep_mixed;
-    for (1..$deep_target) {
+    for (1..$mixed_target) {
         my $next = [];
         push @$curr, {val => $next};
         $curr = $next;
@@ -178,7 +183,7 @@ my $moderate_target  = 1000;
     };
 
     ok(!$@ && defined($cloned),
-       "Should clone $deep_target-deep mixed array/hash structure without stack overflow")
+       "Should clone $mixed_target-deep mixed array/hash structure without stack overflow")
         or diag("Error during clone: " . ($@ || "undefined result"));
 
     SKIP: {
@@ -191,11 +196,11 @@ my $moderate_target  = 1000;
             $walk = $walk->[0]{val};
             $measured++;
         }
-        is($measured, $deep_target,
-           "Mixed deep structure should maintain full depth ($deep_target levels)");
+        is($measured, $mixed_target,
+           "Mixed deep structure should maintain full depth ($mixed_target levels)");
 
         # Clone independence: mutate a deep hash node in clone
-        my $depth_target = $is_limited_stack ? 1500 : 2500;
+        my $depth_target = $is_limited_stack ? 500 : 2500;
         my $walk_orig  = $deep_mixed;
         my $walk_clone = $cloned;
         for (1..$depth_target) {
@@ -331,5 +336,150 @@ my $moderate_target  = 1000;
         # Test 22: both point to the same cloned object
         is(refaddr($cloned->{strong}), refaddr($cloned->{weak}),
            "Strong and weak refs point to same cloned deep AV");
+    }
+}
+
+# Tests 24-26: Blessed hashes preserved at iterative depth
+# Mirrors the blessed AV tests in t/25-iterative-bless.t but for hash chains.
+# Each level is a blessed hashref containing an RV to the next blessed hashref.
+# At rdepth > MAX_DEPTH, rv_clone_iterative must preserve blessings via its
+# rebuild loop, and hv_clone_iterative must correctly iterate the hash values.
+{
+    my $target_depth = $deep_target;
+
+    my $deep = bless { next => undef }, 'DeepHash';
+    my $curr = $deep;
+    for (2 .. $target_depth) {
+        my $next = bless { next => undef }, 'DeepHash';
+        $curr->{next} = $next;
+        $curr = $next;
+    }
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($deep);
+    };
+
+    # Test 24: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone $target_depth-deep blessed hash chain without stack overflow")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed, can't verify blessing", 2 unless defined $cloned;
+
+        # Test 25: root blessed hash class preserved
+        is(ref($cloned), 'DeepHash',
+           "Root blessed hash class preserved at iterative depth");
+
+        # Test 26: walk past MAX_DEPTH/2 and verify blessing
+        my $check_depth = int($deep_target / 2) + 200;
+        my $walk = $cloned;
+        for (1 .. $check_depth) {
+            last unless ref($walk) eq 'DeepHash' && defined $walk->{next};
+            $walk = $walk->{next};
+        }
+        is(ref($walk), 'DeepHash',
+           "Blessed hash class preserved at depth $check_depth (past MAX_DEPTH/2)");
+    }
+}
+
+# Tests 27-31: Weakref preservation past MAX_DEPTH for RV-to-HV
+# Mirrors tests 18-23 (which cover RV-to-AV) but for hash structures.
+# Before rv_clone_iterative consolidation, only AV weakrefs were tested;
+# HV weakrefs follow the same code path but deserve explicit coverage.
+{
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $target_depth = int($max_depth_val / 2) + 200;
+
+    # Build deeply nested hash chain
+    my $deep_hv = {};
+    my $curr = $deep_hv;
+    for (1 .. $target_depth) {
+        my $next = {};
+        $curr->{x} = $next;
+        $curr = $next;
+    }
+
+    # Structure with both strong and weak refs to the deep hash
+    my $holder = { strong => $deep_hv, weak => $deep_hv };
+    weaken($holder->{weak});
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($holder);
+    };
+
+    # Test 27: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone structure with weak ref to deeply nested HV")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed", 4 unless defined $cloned;
+
+        # Test 28: weak ref survives (strong ref exists in clone graph)
+        ok(defined $cloned->{weak},
+           "Weak ref to deep HV survives when strong ref exists in clone");
+
+        # Test 29: weak ref is actually weak
+        ok(isweak($cloned->{weak}),
+           "Weak ref to deep HV past MAX_DEPTH remains weak after clone");
+
+        # Test 30: strong ref is not weak
+        ok(!isweak($cloned->{strong}),
+           "Strong ref to deep HV past MAX_DEPTH remains strong");
+
+        # Test 31: both point to the same cloned object
+        is(refaddr($cloned->{strong}), refaddr($cloned->{weak}),
+           "Strong and weak refs point to same cloned deep HV");
+    }
+}
+
+# Tests 32-33: Shared RV identity across shallow and iterative-depth paths
+# When the same RV (refcount > 1) is reachable from both a shallow path
+# and a deep path past MAX_DEPTH, the clone should preserve identity —
+# both paths should resolve to the same cloned SV.
+# Bug: rv_clone_iterative lacked CLONE_FETCH at entry (unlike av/hv
+# iterative), so it always created a new clone instead of reusing the
+# one already cached by the shallower recursive path.
+{
+    my $chain_depth = $is_limited_stack ? 2500 : 5000;
+
+    my $shared = { key => 'val' };
+
+    # Deep chain with $shared at the bottom
+    my $deep = $shared;
+    for (1 .. $chain_depth) {
+        $deep = [$deep];
+    }
+
+    # Root: shallow ref and deep ref to the same hashref
+    my $root = [$shared, $deep];
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($root);
+    };
+
+    # Test 32: clone must not die
+    ok(!$@ && defined($cloned),
+       "Should clone structure with shared RV at shallow and deep (>MAX_DEPTH) depths")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip "Clone failed", 1 unless defined $cloned;
+
+        # Navigate to the bottom of the deep chain
+        my $walk = $cloned->[1];
+        while (ref($walk) eq 'ARRAY' && @$walk == 1 && ref($walk->[0]) eq 'ARRAY') {
+            $walk = $walk->[0];
+        }
+        my $deep_ref  = $walk->[0];
+        my $shallow_ref = $cloned->[0];
+
+        # Test 33: same cloned RV via both paths (identity preservation)
+        is(refaddr($shallow_ref), refaddr($deep_ref),
+           "Shared RV identity preserved between shallow and deep (>MAX_DEPTH) paths");
     }
 }
