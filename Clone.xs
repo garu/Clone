@@ -619,6 +619,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       case SVt_PVHV:	/* 11 */
         clone = (SV *) newHV();
         break;
+#if PERL_VERSION >= 38
+      case SVt_PVOBJ:	/* 16 — class instances (Perl 5.38+) */
+        clone = newSV(0);
+        sv_upgrade(clone, SVt_PVOBJ);
+        break;
+#endif
       #if PERL_VERSION <= 8
       case SVt_PVBM:	/* 8 */
       #elif PERL_VERSION >= 11
@@ -786,6 +792,30 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       clone = hv_clone (ref, clone, hseen, depth, rdepth, weakrefs);
     else if ( SvTYPE(ref) == SVt_PVAV )
       clone = av_clone (ref, clone, hseen, depth, rdepth, weakrefs);
+#if PERL_VERSION >= 38
+    /* class instances (Perl 5.38+): clone each object field */
+    else if ( SvTYPE(ref) == SVt_PVOBJ )
+      {
+        SSize_t maxfield = ObjectMAXFIELD(ref);
+        if (maxfield >= 0)
+          {
+            SV **src_fields = ObjectFIELDS(ref);
+            SV **dst_fields;
+            int recur = depth > 0 ? depth - 1 : -1;
+            SSize_t fi;
+
+            Newx(dst_fields, maxfield + 1, SV *);
+            for (fi = 0; fi <= maxfield; fi++)
+              {
+                dst_fields[fi] = src_fields[fi]
+                  ? sv_clone(src_fields[fi], hseen, recur, rdepth, weakrefs)
+                  : newSV(0);
+              }
+            ObjectFIELDS(clone) = dst_fields;
+            ObjectMAXFIELD(clone) = maxfield;
+          }
+      }
+#endif /* PERL_VERSION >= 38 */
     /* 3: REFERENCE (inlined for speed) */
     else if (SvROK (ref))
       {
@@ -794,6 +824,14 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
         if (SvOBJECT(SvRV(ref)))
         {
+#if PERL_VERSION >= 38
+            /* sv_bless rejects class stashes (Perl 5.38+): set directly */
+            if (SvTYPE(SvRV(ref)) == SVt_PVOBJ) {
+                SvOBJECT_on(SvRV(clone));
+                SvSTASH_set(SvRV(clone),
+                            (HV *)SvREFCNT_inc(SvSTASH(SvRV(ref))));
+            } else
+#endif
             sv_bless (clone, SvSTASH (SvRV (ref)));
         }
         if (SvWEAKREF(ref)) {
