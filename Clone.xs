@@ -7,23 +7,28 @@
 
 #define CLONE_KEY(x) ((char *) &x)
 
-/* Maximum safe recursion depth before switching to iterative mode.
+/* Maximum safe nesting depth before switching to iterative mode.
  * Each nesting level of [[[...]]] consumes ~3 C stack frames in the
- * recursive clone path (sv_clone for RV + sv_clone for AV + av_clone).
- * The rdepth counter increments once per sv_clone() call, so the
- * nesting level is roughly rdepth/2, using ~450 bytes of stack each.
+ * recursive clone path (sv_clone for RV + sv_clone for AV + av_clone),
+ * using ~450 bytes of stack each.
+ *
+ * The rdepth counter increments once per RV dereference (i.e. per
+ * nesting level), NOT on every sv_clone() call.  Sibling elements
+ * within an array or hash do not increase rdepth, so wide structures
+ * (flat arrays/hashes with many elements) never falsely trigger the
+ * iterative fallback.
  *
  * Windows has a 1 MB default thread stack; Cygwin typically 2 MB.
  * Linux/macOS default to 8 MB but some CPAN smokers and containers
  * may have 4 MB or less available after Perl/harness overhead.
  *
- * MAX_DEPTH=2000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
- * MAX_DEPTH=4000 elsewhere        -> ~2000 nesting levels -> ~900 KB.
+ * MAX_DEPTH=1000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
+ * MAX_DEPTH=2000 elsewhere         -> ~2000 nesting levels -> ~900 KB.
  * (GH #77: 32000 was too aggressive — caused SEGV on CPAN smokers.) */
 #if defined(_WIN32) || defined(__CYGWIN__)
-#define MAX_DEPTH 2000
+#define MAX_DEPTH 1000
 #else
-#define MAX_DEPTH 4000
+#define MAX_DEPTH 2000
 #endif
 
 #define CLONE_STORE(x,y)						\
@@ -430,13 +435,16 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     if (!ref)
         return NULL;
 
-    rdepth++;
+    /* Note: rdepth is NOT incremented here.  It is incremented only when
+     * following an RV dereference (the sole source of recursive nesting).
+     * Sibling calls from av_clone/hv_clone element loops keep the same
+     * rdepth, so a flat array of N elements never falsely triggers the
+     * iterative fallback regardless of N. */
 
-    /* Check for deep recursion and switch to iterative mode.
-     * A deeply nested arrayref like [[[...]]] alternates between RV and AV
-     * at each level, consuming ~3 C stack frames per nesting level.
-     * On Windows (1MB default stack), this overflows around depth 2000.
-     * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
+    /* Check for deep nesting and switch to iterative mode.
+     * A deeply nested arrayref like [[[...]]] consumes ~3 C stack frames
+     * per nesting level.  When we exceed MAX_DEPTH nesting levels,
+     * switch to iterative handlers for AV, HV, and RV types. */
     if (rdepth > MAX_DEPTH) {
         if (SvTYPE(ref) == SVt_PVAV) {
             return av_clone_iterative(ref, hseen, rdepth, weakrefs);
@@ -791,7 +799,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       {
         TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
         SvREFCNT_dec(SvRV(clone));
-        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
+        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth + 1, weakrefs); /* Clone the referent */
         if (SvOBJECT(SvRV(ref)))
         {
             sv_bless (clone, SvSTASH (SvRV (ref)));
