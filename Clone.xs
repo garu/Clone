@@ -47,6 +47,7 @@ static SV *sv_clone (SV *, HV *, int, int, AV *);
 static SV *av_clone_iterative(SV *, HV *, int, AV *);
 static SV *hv_clone_iterative(SV *, HV *, int, AV *);
 static SV *rv_clone_iterative(SV *, HV *, int, AV *);
+static int clone_magic(SV *, SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
 #define TRACEME(a) printf("%s:%d: ",__FUNCTION__, __LINE__) && printf a;
@@ -377,6 +378,123 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     return result;
 }
 
+/* Clone all magic entries from ref onto clone.
+ * Returns the number of tie-magic entries cloned; the caller uses this
+ * to decide whether to skip direct HV/AV element iteration (tied
+ * containers are managed entirely by their tie magic). */
+static int
+clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
+{
+    MAGIC* mg;
+    int has_qr = 0;
+    int magic_ref = 0;
+
+    for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
+    {
+      SV *obj = (SV *) NULL;
+      TRACEME(("magic type: %c\n", mg->mg_type));
+
+      /* PERL_MAGIC_ext: opaque XS data, handle before the mg_obj check
+       * since ext magic often has mg_obj == NULL (GH #27, GH #16) */
+      if (mg->mg_type == '~')
+      {
+#if defined(MGf_DUP) && defined(sv_magicext)
+        /* If the ext magic has a dup callback (e.g. Math::BigInt::GMP),
+         * clone it properly via sv_magicext + svt_dup.
+         * Otherwise skip it (e.g. DBI handles have no dup).
+         * Note: we check only for svt_dup presence, not MGf_DUP flag,
+         * because some older XS modules (e.g. Math::BigInt::GMP on
+         * Perl 5.22) provide svt_dup without setting MGf_DUP. (GH #76) */
+        if (mg->mg_virtual && mg->mg_virtual->svt_dup)
+        {
+          MAGIC *new_mg;
+          new_mg = sv_magicext(clone, mg->mg_obj,
+                               mg->mg_type, mg->mg_virtual,
+                               mg->mg_ptr, mg->mg_len);
+          new_mg->mg_flags |= MGf_DUP;
+          /* CLONE_PARAMS is NULL since we are not in a thread clone.
+           * Known callers (e.g. Math::BigInt::GMP) ignore it. */
+          mg->mg_virtual->svt_dup(aTHX_ new_mg, NULL);
+        }
+#endif
+        continue;
+      }
+
+      /* threads::shared uses tie magic ('P') with a threads::shared::tie
+       * object, and shared_scalar magic ('n'/'N') for scalars.
+       * Cloning these produces invalid tie objects that crash on access.
+       * Strip the sharing magic so hv_clone/av_clone can iterate through
+       * the tie to read the actual data. (GH #18) */
+      if (mg->mg_type == PERL_MAGIC_shared_scalar
+          || mg->mg_type == PERL_MAGIC_shared)
+        continue;
+
+      /* Some mg_obj's can be null, don't bother cloning */
+      if ( mg->mg_obj != NULL )
+      {
+        switch (mg->mg_type)
+        {
+          case 'r':	/* PERL_MAGIC_qr  */
+            obj = mg->mg_obj;
+            has_qr = 1;
+            break;
+          case 't':	/* PERL_MAGIC_taint */
+          case '<': /* PERL_MAGIC_backref */
+          case '@':  /* PERL_MAGIC_arylen_p */
+            continue; /* resumes the outer magic iteration loop */
+          case 'P': /* PERL_MAGIC_tied */
+          case 'p': /* PERL_MAGIC_tiedelem */
+          case 'q': /* PERL_MAGIC_tiedscalar */
+            /* threads::shared::tie objects are not real tie objects --
+             * skip them so the clone becomes a plain unshared copy.
+             * The data will be read through the tie during hv_clone/av_clone. */
+            if (is_threads_shared_tie(mg->mg_obj))
+              continue;
+	          magic_ref++;
+	    /* fall through */
+          default:
+            obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
+        }
+      } else {
+        TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
+      }
+
+      { /* clone the mg_ptr pv */
+        char *mg_ptr = mg->mg_ptr; /* default */
+
+        if (mg->mg_len >= 0) {
+          /* sv_magic() with non-negative namlen calls savepvn()
+           * internally to make its own copy — no need to allocate
+           * an intermediate buffer here; just pass the original
+           * mg_ptr through.  (fixes 20-year-old memory leak) */
+        } else if (mg->mg_len == HEf_SVKEY) {
+          /* mg_ptr is an SV*; sv_magic() below will SvREFCNT_inc it */
+        } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
+          if (mg->mg_ptr) {
+            STRLEN *cache;
+            Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+            mg_ptr = (char *) cache;
+            Copy(mg->mg_ptr, mg_ptr, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+          }
+        } else if ( mg->mg_ptr != NULL) {
+          croak("Unsupported magic_ptr clone");
+        }
+
+        sv_magic(clone,
+                 obj,
+                 mg->mg_type,
+                 mg_ptr,
+                 mg->mg_len);
+
+      }
+    }
+    /* Null the qr vtable -- avoid mg_find traversal if we already know */
+    if (has_qr && (mg = mg_find(clone, 'r')))
+      mg->mg_virtual = (MGVTBL *) NULL;
+
+    return magic_ref;
+}
+
 static SV *
 av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
@@ -668,115 +786,10 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
      * chocolateboy: 2001-05-29
      */
 
-    /* 1: TIED */
-  if (SvMAGICAL(ref) )
-    {
-      MAGIC* mg;
-      int has_qr = 0;
+    /* 1: TIED / MAGIC */
+  if (SvMAGICAL(ref))
+      magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs);
 
-      for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
-      {
-        SV *obj = (SV *) NULL;
-        TRACEME(("magic type: %c\n", mg->mg_type));
-
-        /* PERL_MAGIC_ext: opaque XS data, handle before the mg_obj check
-         * since ext magic often has mg_obj == NULL (GH #27, GH #16) */
-        if (mg->mg_type == '~')
-        {
-#if defined(MGf_DUP) && defined(sv_magicext)
-          /* If the ext magic has a dup callback (e.g. Math::BigInt::GMP),
-           * clone it properly via sv_magicext + svt_dup.
-           * Otherwise skip it (e.g. DBI handles have no dup).
-           * Note: we check only for svt_dup presence, not MGf_DUP flag,
-           * because some older XS modules (e.g. Math::BigInt::GMP on
-           * Perl 5.22) provide svt_dup without setting MGf_DUP. (GH #76) */
-          if (mg->mg_virtual && mg->mg_virtual->svt_dup)
-          {
-            MAGIC *new_mg;
-            new_mg = sv_magicext(clone, mg->mg_obj,
-                                 mg->mg_type, mg->mg_virtual,
-                                 mg->mg_ptr, mg->mg_len);
-            new_mg->mg_flags |= MGf_DUP;
-            /* CLONE_PARAMS is NULL since we are not in a thread clone.
-             * Known callers (e.g. Math::BigInt::GMP) ignore it. */
-            mg->mg_virtual->svt_dup(aTHX_ new_mg, NULL);
-          }
-#endif
-          continue;
-        }
-
-        /* threads::shared uses tie magic ('P') with a threads::shared::tie
-         * object, and shared_scalar magic ('n'/'N') for scalars.
-         * Cloning these produces invalid tie objects that crash on access.
-         * Strip the sharing magic so hv_clone/av_clone can iterate through
-         * the tie to read the actual data. (GH #18) */
-        if (mg->mg_type == PERL_MAGIC_shared_scalar
-            || mg->mg_type == PERL_MAGIC_shared)
-          continue;
-
-        /* Some mg_obj's can be null, don't bother cloning */
-        if ( mg->mg_obj != NULL )
-        {
-          switch (mg->mg_type)
-          {
-            case 'r':	/* PERL_MAGIC_qr  */
-              obj = mg->mg_obj;
-              has_qr = 1;
-              break;
-            case 't':	/* PERL_MAGIC_taint */
-            case '<': /* PERL_MAGIC_backref */
-            case '@':  /* PERL_MAGIC_arylen_p */
-              continue; /* resumes the outer magic iteration loop */
-            case 'P': /* PERL_MAGIC_tied */
-            case 'p': /* PERL_MAGIC_tiedelem */
-            case 'q': /* PERL_MAGIC_tiedscalar */
-              /* threads::shared::tie objects are not real tie objects --
-               * skip them so the clone becomes a plain unshared copy.
-               * The data will be read through the tie during hv_clone/av_clone. */
-              if (is_threads_shared_tie(mg->mg_obj))
-                continue;
-	            magic_ref++;
-	      /* fall through */
-            default:
-              obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
-          }
-        } else {
-          TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
-        }
-
-        { /* clone the mg_ptr pv */
-          char *mg_ptr = mg->mg_ptr; /* default */
-
-          if (mg->mg_len >= 0) {
-            /* sv_magic() with non-negative namlen calls savepvn()
-             * internally to make its own copy — no need to allocate
-             * an intermediate buffer here; just pass the original
-             * mg_ptr through.  (fixes 20-year-old memory leak) */
-          } else if (mg->mg_len == HEf_SVKEY) {
-            /* mg_ptr is an SV*; sv_magic() below will SvREFCNT_inc it */
-          } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
-            if (mg->mg_ptr) {
-              STRLEN *cache;
-              Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
-              mg_ptr = (char *) cache;
-              Copy(mg->mg_ptr, mg_ptr, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
-            }
-          } else if ( mg->mg_ptr != NULL) {
-            croak("Unsupported magic_ptr clone");
-          }
-
-          sv_magic(clone,
-                   obj,
-                   mg->mg_type,
-                   mg_ptr,
-                   mg->mg_len);
-
-        }
-      }
-      /* Null the qr vtable -- avoid mg_find traversal if we already know */
-      if (has_qr && (mg = mg_find(clone, 'r')))
-        mg->mg_virtual = (MGVTBL *) NULL;
-    }
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
     /* For tied HV/AV (magic_ref > 0): skip direct element iteration;
      * the tie magic cloned above handles the data. */
