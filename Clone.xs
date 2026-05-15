@@ -32,10 +32,13 @@ do {									\
 	SvREFCNT_dec(y); /* Restore the refcount */			\
 	croak("Can't store clone in seen hash (hseen)");		\
     }									\
-    else {	\
-  TRACEME(("storing ref = 0x%x clone = 0x%x\n", ref, clone));	\
-  TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));	\
-  TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));	\
+    else {								\
+	TRACEME(("storing ref = 0x%" UVxf " clone = 0x%" UVxf "\n",	\
+		 PTR2UV(x), PTR2UV(y)));				\
+	TRACEME(("clone = 0x%" UVxf "(%d)\n",				\
+		 PTR2UV(y), SvREFCNT(y)));				\
+	TRACEME(("ref = 0x%" UVxf "(%d)\n",				\
+		 PTR2UV(x), SvREFCNT(x)));				\
     }									\
 } while (0)
 
@@ -69,7 +72,7 @@ static SV *rv_clone_iterative(SV *, HV *, int, AV *);
 static int clone_magic(SV *, SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
-#define TRACEME(a) printf("%s:%d: ",__FUNCTION__, __LINE__) && printf a;
+#define TRACEME(a) do { printf("%s:%d: ",__func__, __LINE__); printf a; } while (0)
 #else
 #define TRACEME(a)
 #endif
@@ -97,7 +100,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 
   assert(SvTYPE(ref) == SVt_PVHV);
 
-  TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
+  TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
   /* Pre-size the target hash to avoid incremental resizing */
   if (HvKEYS(self) > 0)
@@ -117,7 +120,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
       hv_store(clone, kpv, klen, val, HeHASH(next));
     }
 
-  TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
+  TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
   return (SV *) clone;
 }
 
@@ -625,7 +628,7 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 
     assert(SvTYPE(ref) == SVt_PVAV);
 
-    TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
+    TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
     arrlen = av_len(self);
     av_extend(clone, arrlen);
@@ -641,7 +644,7 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
     }
     AvFILLp(clone) = arrlen;
 
-    TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
+    TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
     return (SV *) clone;
 }
 
@@ -733,14 +736,14 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
   visible = (SvREFCNT(ref) > 1) || SvMAGICAL(ref)
           || (SvTYPE(ref) == SVt_PVHV && SvOOK(ref));
 
-  TRACEME(("ref = 0x%x(%d)\n", ref, SvREFCNT(ref)));
+  TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
   if (depth == 0)
     return SvREFCNT_inc(ref);
 
   if (visible && (seen = CLONE_FETCH(ref)))
     {
-      TRACEME(("fetch ref (0x%x)\n", ref));
+      TRACEME(("fetch ref (0x%" UVxf ")\n", PTR2UV(ref)));
       return SvREFCNT_inc(*seen);
     }
 
@@ -766,7 +769,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     }
   }
 
-  TRACEME(("switch: (0x%x)\n", ref));
+  TRACEME(("switch: (0x%" UVxf ")\n", PTR2UV(ref)));
   switch (SvTYPE (ref))
     {
       case SVt_NULL:	/* 0 */
@@ -865,7 +868,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       case SVt_PVGV:	/* 13 */
       case SVt_PVFM:	/* 14 */
       case SVt_PVIO:	/* 15 */
-        TRACEME(("default: type = 0x%x\n", SvTYPE (ref)));
+        TRACEME(("default: type = 0x%x\n", (int)SvTYPE (ref)));
         clone = SvREFCNT_inc(ref);  /* just return the ref */
         break;
       default:
@@ -944,7 +947,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     /* 3: REFERENCE (inlined for speed) */
     else if (SvROK (ref))
       {
-        TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
+        TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
         SvREFCNT_dec(SvRV(clone));
         SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
         if (SvOBJECT(SvRV(ref)))
@@ -977,7 +980,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       }
   }
 
-  TRACEME(("clone = 0x%x(%d)\n", clone, SvREFCNT(clone)));
+  TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
   return clone;
 }
 
@@ -1002,7 +1005,7 @@ clone(self, depth=-1)
 	 * freed during stack unwinding. */
 	SAVEFREESV((SV *)hseen);
 	SAVEFREESV((SV *)weakrefs);
-	TRACEME(("ref = 0x%x\n", self));
+	TRACEME(("ref = 0x%" UVxf "\n", PTR2UV(self)));
 	clone = sv_clone(self, hseen, depth, 0, weakrefs);
 	/* Now apply deferred weakening (GH #15).
 	 * All strong references in the clone graph are established,
