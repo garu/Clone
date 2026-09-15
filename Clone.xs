@@ -41,11 +41,30 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
+/* Work item for the iterative (past-MAX_DEPTH) cloner: a source
+ * container paired with its already-allocated clone shell. */
+typedef struct {
+    SV *src;	/* source AV or HV                                */
+    SV *dst;	/* its clone, already registered in hseen, empty  */
+} clone_task;
+
+typedef struct {
+    clone_task *items;
+    I32 len;
+    I32 max;
+    /* Scratch buffer rv_clone_chain walks RV chains into.  It lives here
+     * so it is allocated once per clone rather than once per element, and
+     * so it is covered by the queue's croak-safe cleanup.  rv_clone_chain
+     * never re-enters itself, so a single shared buffer is safe. */
+    SV **chain;
+    I32 chain_max;
+} clone_queue;
+
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
-static SV *av_clone_iterative(SV *, HV *, int, AV *);
-static SV *hv_clone_iterative(SV *, HV *, int, AV *);
+static SV *clone_container_iterative(SV *, HV *, int, AV *);
+static SV *rv_clone_chain(SV *, HV *, int, AV *, clone_queue *);
 static SV *rv_clone_iterative(SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
@@ -101,184 +120,221 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
   return (SV *) clone;
 }
 
-static SV *
-av_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+/* ------------------------------------------------------------------- *
+ * Iterative container cloning (used once rdepth exceeds MAX_DEPTH)
+ *
+ * Past MAX_DEPTH the recursive path would overflow the C stack, so
+ * nested containers are cloned through an explicit, heap-allocated work
+ * queue instead.  Each task pairs a source container with an empty clone
+ * shell that is already registered in hseen; draining a task fills the
+ * shell and pushes a new task for every nested container it finds.
+ *
+ * The previous implementation only unrolled single-element array chains
+ * and otherwise recursed back through sv_clone, costing one C stack
+ * frame per nesting level for hashes and mixed array/hash structures.
+ * That overflowed Windows' 1 MB default thread stack (GH #146).  The
+ * queue makes C stack usage O(1) in the nesting depth for every shape.
+ * ------------------------------------------------------------------- */
+
+/* Registered with SAVEDESTRUCTOR_X so the queue is released both on the
+ * normal path (at LEAVE) and when cloning croaks — a dying __WARN__
+ * handler on the depth-limit warning, or a tied FETCH, longjmps straight
+ * past any explicit Safefree.  The queue itself lives on the heap because
+ * the savestack is unwound after our C frame is already gone. */
+static void
+clone_queue_free(pTHX_ void *p)
 {
-    AV *self;
-    AV *root_clone;
-    AV *tail;
-    SV *current_ref;
-    SV **seen = NULL;
+    clone_queue *q = (clone_queue *) p;
+    I32 i;
+
+    for (i = 0; i < q->len; i++)
+        SvREFCNT_dec(q->items[i].src);
+
+    Safefree(q->items);
+    Safefree(q->chain);
+    Safefree(q);
+}
+
+static void
+clone_queue_push(clone_queue *q, SV *src, SV *dst)
+{
+    if (q->len >= q->max) {
+        q->max = q->max ? q->max * 2 : 64;
+        if (q->items)
+            Renew(q->items, q->max, clone_task);
+        else
+            Newx(q->items, q->max, clone_task);
+    }
+    /* Hold a reference to the source until the task is drained.  Filling
+     * is deferred, and anything running in between (a tied FETCH, a
+     * DESTROY, a __WARN__ handler) can drop the caller's last reference to
+     * a container we have already queued.  dst needs no such reference:
+     * hseen holds one.  clone_queue_free releases these. */
+    q->items[q->len].src = SvREFCNT_inc_simple_NN(src);
+    q->items[q->len].dst = dst;
+    q->len++;
+}
+
+/* Return the clone of a container (AV or HV), creating an empty shell and
+ * queueing it for filling the first time we see it.  Registering the shell
+ * in hseen before it is filled is what makes circular references safe.
+ * The returned SV carries one reference for the caller. */
+static SV *
+clone_shell(SV *ref, HV *hseen, clone_queue *q)
+{
+    SV **seen;
+    SV *clone;	/* named to match CLONE_STORE's TRACEME under DEBUG_CLONE */
+
+    if ((seen = CLONE_FETCH(ref)))
+        return SvREFCNT_inc(*seen);
+
+    clone = (SvTYPE(ref) == SVt_PVHV) ? (SV *) newHV() : (SV *) newAV();
+    CLONE_STORE(ref, clone);
+    clone_queue_push(q, ref, clone);
+
+    return clone;
+}
+
+/* Clone one element of a container without recursing into nested
+ * containers: those become queued tasks instead. */
+static SV *
+clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
+{
+    if (!e)
+        return NULL;
+
+    if (SvROK(e)) {
+        SV *referent = SvRV(e);
+
+        /* Handled inline rather than through rv_clone_chain: a direct
+         * reference to a container is by far the common case, and this
+         * skips the chain walk for a chain of length one. */
+        if (referent
+            && (SvTYPE(referent) == SVt_PVAV || SvTYPE(referent) == SVt_PVHV)) {
+            SV *new_rv = newRV_noinc(clone_shell(referent, hseen, q));
+            if (SvOBJECT(referent))
+                sv_bless(new_rv, SvSTASH(referent));
+            if (SvWEAKREF(e))
+                av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
+            return new_rv;
+        }
+
+        /* Scalar-ref chain: walked iteratively, container leaves rejoin
+         * this queue. */
+        return rv_clone_chain(e, hseen, rdepth, weakrefs, q);
+    }
+
+    /* Plain scalar leaf.  rdepth is above MAX_DEPTH here, so sv_clone
+     * takes its non-recursive branch (newSVsv, or share-with-warning for
+     * types that cannot be copied at all). */
+    return sv_clone(e, hseen, 1, rdepth, weakrefs);
+}
+
+static void
+clone_fill_av(AV *src, AV *dst, HV *hseen, int rdepth, AV *weakrefs,
+              clone_queue *q)
+{
     SV **svp;
+    SV **slot;
     I32 arrlen;
     I32 i;
 
-    if (!ref) return NULL;
+    arrlen = av_len(src);
+    if (arrlen < 0)
+        return;
 
-    self = (AV *)ref;
+    av_extend(dst, arrlen);
 
-    /* Check if we've already cloned this array */
-    if ((seen = CLONE_FETCH(ref))) {
-        return SvREFCNT_inc(*seen);
+    /* Fetch from the source (which may be magical) but write straight
+     * into the target's AvARRAY: we just created it, so it has no magic. */
+    slot = AvARRAY(dst);
+    for (i = 0; i <= arrlen; i++) {
+        svp = av_fetch(src, i, 0);
+        if (svp)
+            slot[i] = clone_elem(*svp, hseen, rdepth, weakrefs, q);
     }
-
-    /* Create new array and store it in seen hash immediately */
-    root_clone = newAV();
-    CLONE_STORE(ref, (SV *)root_clone);
-
-    /* Optimized path for deeply nested single-element arrays:
-     * [[[...]]] chains are unrolled iteratively to avoid stack overflow.
-     * Each nesting level is an AV with one element (an RV to the next AV). */
-    if (av_len(self) == 0) {
-        svp = av_fetch(self, 0, 0);
-        if (svp && SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVAV) {
-            tail = root_clone;
-            current_ref = *svp;
-
-            /* Walk the chain: each step creates one AV and one RV link */
-            while (current_ref && SvROK(current_ref) &&
-                   SvTYPE(SvRV(current_ref)) == SVt_PVAV &&
-                   av_len((AV*)SvRV(current_ref)) == 0) {
-                SV *inner_sv = SvRV(current_ref);
-                SV **already;
-                AV *new_av;
-
-                /* Guard against circular refs: if this AV was already cloned,
-                 * link to the existing clone and stop walking. */
-                already = CLONE_FETCH(inner_sv);
-                if (already) {
-                    av_store(tail, 0, newRV_inc(*already));
-                    break;
-                }
-
-                new_av = newAV();
-
-                /* Preserve blessing if the original AV is an object.
-                 * Without this, blessed arrayrefs in the chain lose
-                 * their class when cloned via the iterative path. */
-                if (SvOBJECT(inner_sv)) {
-                    SV *tmp_rv = newRV((SV *)new_av);
-                    sv_bless(tmp_rv, SvSTASH(inner_sv));
-                    SvREFCNT_dec(tmp_rv);
-                }
-
-                av_store(tail, 0, newRV_noinc((SV*)new_av));
-                CLONE_STORE(inner_sv, (SV*)new_av);
-
-                /* Advance to the next element in the chain */
-                svp = av_fetch((AV*)inner_sv, 0, 0);
-                if (!svp) break;
-                current_ref = *svp;
-                tail = new_av;
-            }
-
-            /* Handle the final element (leaf or non-matching structure) */
-            if (current_ref) {
-                if (SvROK(current_ref) &&
-                    SvTYPE(SvRV(current_ref)) == SVt_PVAV) {
-                    /* Final AV — clone it iteratively too.  Re-apply the
-                     * original referent's blessing on the wrapping RV so
-                     * a blessed multi-element terminator does not lose
-                     * its class (mirrors the in-loop logic above). */
-                    SV *inner = SvRV(current_ref);
-                    SV *leaf = av_clone_iterative(inner, hseen, rdepth, weakrefs);
-                    SV *new_rv = newRV_noinc(leaf);
-                    if (SvOBJECT(inner))
-                        sv_bless(new_rv, SvSTASH(inner));
-                    av_store(tail, 0, new_rv);
-                } else if (SvROK(current_ref)) {
-                    av_store(tail, 0,
-                             sv_clone(current_ref, hseen, 1, rdepth, weakrefs));
-                } else {
-                    av_store(tail, 0, newSVsv(current_ref));
-                }
-            }
-
-            return (SV*)root_clone;
-        }
-
-        /* Single non-array element */
-        if (svp) {
-            av_store(root_clone, 0,
-                     sv_clone(*svp, hseen, 1, rdepth, weakrefs));
-        }
-        return (SV*)root_clone;
-    }
-
-    /* General case: array with multiple elements */
-    arrlen = av_len(self);
-    av_extend(root_clone, arrlen);
-
-    {
-        SV **dst = AvARRAY(root_clone);
-        for (i = 0; i <= arrlen; i++) {
-            svp = av_fetch(self, i, 0);
-            if (svp) {
-                dst[i] = sv_clone(*svp, hseen, 1, rdepth, weakrefs);
-            }
-        }
-        AvFILLp(root_clone) = arrlen;
-    }
-
-    return (SV*)root_clone;
+    AvFILLp(dst) = arrlen;
 }
 
-/* Iterative hash clone for use when rdepth exceeds MAX_DEPTH.
- * Mirrors av_clone_iterative: creates a new HV, registers it in hseen for
- * circular-ref safety, then clones each value via sv_clone (which will
- * re-enter this function for any nested HVs still above MAX_DEPTH). */
-static SV *
-hv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+static void
+clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
+              clone_queue *q)
 {
-    HV *self;
-    HV *root_clone;
-    SV **seen = NULL;
-    HE *next = NULL;
+    HE *next;
+
+    /* Pre-size to avoid incremental resizing */
+    if (HvKEYS(src) > 0)
+        hv_ksplit(dst, HvKEYS(src));
+
+    hv_iterinit(src);
+    while ((next = hv_iternext(src))) {
+        I32 klen;
+        char *kpv = hv_iterkey(next, &klen);
+        SV *val = clone_elem(hv_iterval(src, next), hseen, rdepth,
+                             weakrefs, q);
+        /* Negate klen for UTF-8 keys per Perl API convention. */
+        if (HeKUTF8(next))
+            klen = -klen;
+        hv_store(dst, kpv, klen, val, HeHASH(next));
+    }
+}
+
+/* Fill every queued shell.  Tasks appended while draining are picked up
+ * by the same loop, so the whole sub-graph is cloned without recursion.
+ * q->items may be reallocated by clone_queue_push, hence the re-indexing
+ * on each iteration rather than a cached pointer. */
+static void
+clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
+{
+    I32 i;
+
+    for (i = 0; i < q->len; i++) {
+        SV *src = q->items[i].src;
+        SV *dst = q->items[i].dst;
+
+        if (SvTYPE(src) == SVt_PVHV)
+            clone_fill_hv((HV *)src, (HV *)dst, hseen, rdepth, weakrefs, q);
+        else
+            clone_fill_av((AV *)src, (AV *)dst, hseen, rdepth, weakrefs, q);
+    }
+}
+
+/* Entry point for cloning an AV or HV past MAX_DEPTH. */
+static SV *
+clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+{
+    clone_queue *q;
+    SV *root_clone;
 
     if (!ref) return NULL;
 
-    self = (HV *)ref;
+    Newxz(q, 1, clone_queue);
+    ENTER;
+    SAVEDESTRUCTOR_X(clone_queue_free, q);
 
-    /* Return cached clone if we have already visited this HV (circular refs) */
-    if ((seen = CLONE_FETCH(ref))) {
-        return SvREFCNT_inc(*seen);
-    }
+    root_clone = clone_shell(ref, hseen, q);
+    clone_drain(q, hseen, rdepth, weakrefs);
 
-    root_clone = newHV();
-    CLONE_STORE(ref, (SV *)root_clone);
-
-    /* Pre-size to avoid incremental resizing */
-    if (HvKEYS(self) > 0)
-        hv_ksplit(root_clone, HvKEYS(self));
-
-    /* Clone each value; sv_clone will use the iterative path again for any
-     * nested structures that are still above MAX_DEPTH. */
-    hv_iterinit(self);
-    while ((next = hv_iternext(self))) {
-        I32 klen;
-        char *kpv = hv_iterkey(next, &klen);
-        SV *val = sv_clone(hv_iterval(self, next), hseen, 1, rdepth, weakrefs);
-        if (HeKUTF8(next))
-            klen = -klen;
-        hv_store(root_clone, kpv, klen, val, HeHASH(next));
-    }
-
-    return (SV *)root_clone;
+    LEAVE;
+    return root_clone;
 }
 
 /* Iterative clone for deeply nested scalar-ref chains past MAX_DEPTH.
  * Avoids stack overflow by unrolling the RV->RV->...->leaf chain without
  * recursion, then rebuilding from the bottom up.
  *
- * This mirrors av_clone_iterative/hv_clone_iterative: instead of returning
+ * This mirrors clone_container_iterative: instead of returning
  * SvREFCNT_inc(ref) (a shared alias), it produces a true deep copy of the
- * entire scalar-ref chain, preserving isolation. (GH #107) */
+ * entire scalar-ref chain, preserving isolation. (GH #107)
+ *
+ * A container at the end of the chain is handed to the caller's work
+ * queue rather than cloned inline, so an alternating ref/container
+ * structure costs no C stack either. */
 static SV *
-rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
 {
     SV **chain;
     I32 chain_len;
-    I32 chain_max;
     SV *current;
     SV *leaf_clone;
     SV *result;
@@ -287,42 +343,60 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 
     if (!ref || !SvROK(ref)) return NULL;
 
-    chain_max = 64;
+    if (!q->chain) {
+        q->chain_max = 64;
+        Newx(q->chain, q->chain_max, SV *);
+    }
+    chain = q->chain;
     chain_len = 0;
-    Newx(chain, chain_max, SV *);
 
     /* Walk the RV chain, collecting each node until we reach a non-RV leaf
-     * or a referent that has already been cloned (cycle / sharing).
+     * or an RV we have already cloned.
      *
-     * Cycle guard: a chain reachable only past MAX_DEPTH (so the recursive
-     * sv_clone path never had a chance to register it in hseen) can still
-     * fold back on itself.  Without this check, SvRV(current) cycles forever
-     * and chain[] grows unbounded via Renew() until allocation aborts. */
+     * Cycle guard: a chain reachable only past MAX_DEPTH never passed
+     * through the recursive sv_clone path, so nothing registered its nodes
+     * in hseen and it can fold back on itself ("my $x; $x = \$x" hung below
+     * a deep spine, growing chain[] via Renew() until allocation aborted).
+     * Registering a placeholder RV for every link as we descend makes the
+     * revisit visible: CLONE_FETCH below then terminates the walk and the
+     * rebuild closes the cycle onto the placeholder.  The placeholder is a
+     * live RV (to undef) rather than an empty SV so the rebuild can simply
+     * retarget it, exactly as the recursive path does in sv_clone. */
     leaf_clone = NULL;
     current = ref;
     while (current && SvROK(current)) {
-        SV *referent = SvRV(current);
-        SV **already = referent ? CLONE_FETCH(referent) : NULL;
-        if (already) {
-            /* Stop walking; the cached clone is our leaf. */
+        SV **already;
+        SV *placeholder;
+
+        if ((already = CLONE_FETCH(current))) {
+            /* Cycle, or an RV shared with somewhere already cloned. */
             leaf_clone = SvREFCNT_inc(*already);
             break;
         }
-        if (chain_len >= chain_max) {
-            chain_max *= 2;
-            Renew(chain, chain_max, SV *);
+
+        if (chain_len >= q->chain_max) {
+            q->chain_max *= 2;
+            Renew(q->chain, q->chain_max, SV *);
+            chain = q->chain;
         }
         chain[chain_len++] = current;
-        current = referent;
+
+        /* hseen takes the placeholder's only reference (CLONE_STORE incs,
+         * so drop ours).  Holding a second one here would leak the whole
+         * chain if cloning croaked before the rebuild below could hand it
+         * on -- hseen is released during unwinding, nothing else is. */
+        placeholder = newRV_noinc(newSV(0));
+        CLONE_STORE(current, placeholder);
+        SvREFCNT_dec(placeholder);
+
+        current = SvRV(current);
     }
 
     /* If we did not hit a cached referent above, current is now the non-RV
      * leaf; clone it based on its type. */
     if (!leaf_clone && current) {
-        if (SvTYPE(current) == SVt_PVAV) {
-            leaf_clone = av_clone_iterative(current, hseen, rdepth, weakrefs);
-        } else if (SvTYPE(current) == SVt_PVHV) {
-            leaf_clone = hv_clone_iterative(current, hseen, rdepth, weakrefs);
+        if (SvTYPE(current) == SVt_PVAV || SvTYPE(current) == SVt_PVHV) {
+            leaf_clone = clone_shell(current, hseen, q);
         } else {
             seen = CLONE_FETCH(current);
             if (seen) {
@@ -356,24 +430,58 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         }
     }
 
-    if (!leaf_clone) {
-        Safefree(chain);
-        return SvREFCNT_inc(ref);
-    }
+    /* Degenerate case (a ref with no referent at all): the placeholders are
+     * already registered in hseen, so hand the chain an undef leaf rather
+     * than returning the original and leaving hseen inconsistent. */
+    if (!leaf_clone)
+        leaf_clone = newSV(0);
 
-    /* Rebuild the RV chain from the bottom up */
+    /* Rebuild the RV chain from the bottom up by retargeting each link's
+     * placeholder at the clone below it.  Retargeting rather than building
+     * fresh RVs is what lets a cycle close: the link that folded back
+     * already holds the placeholder it has to point at. */
     result = leaf_clone;
     for (i = chain_len - 1; i >= 0; i--) {
         SV *rv = chain[i];
-        SV *new_rv = newRV_noinc(result);
+        SV **php = CLONE_FETCH(rv);
+        SV *new_rv;
+
+        if (!php)			/* cannot happen: stored during the walk */
+            continue;
+        new_rv = *php;
+
+        SvREFCNT_dec(SvRV(new_rv));	/* drop the placeholder's undef  */
+        SvRV_set(new_rv, result);	/* hands our reference to new_rv */
+
         if (SvOBJECT(SvRV(rv)))
             sv_bless(new_rv, SvSTASH(SvRV(rv)));
         if (SvWEAKREF(rv))
             av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
-        result = new_rv;
+
+        /* new_rv is owned by hseen; take a reference for whoever ends up
+         * holding this link (the next link up, or our caller). */
+        result = SvREFCNT_inc_simple_NN(new_rv);
     }
 
-    Safefree(chain);
+    return result;
+}
+
+/* Entry point for cloning a reference past MAX_DEPTH: owns the work
+ * queue that rv_clone_chain and clone_elem feed. */
+static SV *
+rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+{
+    clone_queue *q;
+    SV *result;
+
+    Newxz(q, 1, clone_queue);
+    ENTER;
+    SAVEDESTRUCTOR_X(clone_queue_free, q);
+
+    result = rv_clone_chain(ref, hseen, rdepth, weakrefs, q);
+    clone_drain(q, hseen, rdepth, weakrefs);
+
+    LEAVE;
     return result;
 }
 
@@ -390,7 +498,7 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 
     /* For very deep structures, use the iterative approach */
     if (depth == 0) {
-        return av_clone_iterative(ref, hseen, rdepth, weakrefs);
+        return clone_container_iterative(ref, hseen, rdepth, weakrefs);
     }
 
     clone = (AV *) target;
@@ -438,15 +546,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
      * On Windows (1MB default stack), this overflows around depth 2000.
      * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
     if (rdepth > MAX_DEPTH) {
-        if (SvTYPE(ref) == SVt_PVAV) {
-            return av_clone_iterative(ref, hseen, rdepth, weakrefs);
-        }
-        if (SvTYPE(ref) == SVt_PVHV) {
-            return hv_clone_iterative(ref, hseen, rdepth, weakrefs);
+        if (SvTYPE(ref) == SVt_PVAV || SvTYPE(ref) == SVt_PVHV) {
+            return clone_container_iterative(ref, hseen, rdepth, weakrefs);
         }
         /* All RV types (AV, HV, scalar-ref chains) are handled uniformly
-         * by rv_clone_iterative, which walks the reference chain, dispatches
-         * to av_clone_iterative/hv_clone_iterative for container referents,
+         * by rv_clone_iterative, which walks the reference chain, hands
+         * container referents to the iterative work queue,
          * and properly preserves blessings and SvWEAKREF flags.
          * (The AV/HV cases were previously inlined here but lacked weakref
          * handling — see GH #107, #116, #119 for the iterative gap pattern.) */
@@ -455,7 +560,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
         /* Simple scalars (non-reference, non-container) can always be
          * safely copied without recursion.  newSVsv creates an independent
          * copy, preventing aliasing of leaf values inside iteratively-cloned
-         * containers.  Without this, hv_clone_iterative / av_clone_iterative
+         * containers.  Without this, the iterative container cloner
          * would share leaf SVs between original and clone — mutations
          * through a reference to the clone's value would corrupt the
          * original.  (GH #113) */
