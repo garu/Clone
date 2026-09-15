@@ -135,11 +135,15 @@ Linux/macOS and 1000 on Windows/Cygwin.
 When the limit is exceeded, Clone switches to an iterative fallback
 that preserves deep-copy semantics without stack overflow. This
 covers arrays, hashes, and all reference types (including deeply
-nested scalar references).
+nested scalar references). The fallback drives nested containers
+through a heap-allocated work queue, so its C stack usage does not
+grow with nesting depth whatever the shape of the data.
 
 Non-clonable types (globs, code references, formats, IO handles)
-are always shared regardless of depth. If one of these is encountered
-past the depth limit, a warning is emitted. To silence it:
+are always shared regardless of depth. Encountering one directly as
+a container element past the depth limit also emits a warning (one
+reached through a reference is shared silently, as at any depth).
+To silence it:
 
     $Clone::WARN = 0;
 

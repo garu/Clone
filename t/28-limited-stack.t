@@ -8,11 +8,12 @@
 # structures blew the stack where equally deep array structures did not.
 #
 # Reproduce platform-independently by cloning inside a thread with an
-# explicitly small stack.  2 MB is comfortably above what Clone's
-# *bounded* recursive phase needs (it stops at MAX_DEPTH), but far below
-# what one frame per level at these depths would need.  A regression
-# here aborts the whole file with a stack overflow, which is exactly the
-# symptom reported in the issue.
+# explicitly small stack.  Clone's *bounded* recursive phase (it stops at
+# MAX_DEPTH) needs well under 1 MB, so 4 MB leaves room for fatter frames
+# on a -DDEBUGGING or unoptimised build while staying far below what one
+# frame per level at these depths would need.  A regression here aborts
+# the whole file with a stack overflow, which is exactly the symptom
+# reported in the issue.
 
 use strict;
 use warnings;
@@ -22,6 +23,11 @@ use Test::More;
 BEGIN {
     plan skip_all => 'perl not built with ithreads'
         unless $Config{useithreads};
+    # Perl's own SV teardown only became iterative in 5.14; before that,
+    # *freeing* the deep structures below would blow the small stack by
+    # itself, which is indistinguishable from the regression under test.
+    plan skip_all => 'perl < 5.14 frees deep structures recursively'
+        if $] < 5.014;
     eval { require threads; 1 }
         or plan skip_all => 'threads not loadable';
 }
@@ -30,7 +36,7 @@ plan tests => 9;
 
 use Clone qw(clone);
 
-my $STACK = 2 * 1024 * 1024;
+my $STACK = 4 * 1024 * 1024;
 my $DEPTH = 30_000;
 
 # Run $code in a thread with a deliberately small stack and hand back
@@ -39,6 +45,7 @@ my $DEPTH = 30_000;
 sub in_thread {
     my ($code) = @_;
     my $thr = threads->create({ stack_size => $STACK }, $code);
+    return undef unless $thr;   # creation failed; callers report a failure
     return $thr->join;
 }
 
@@ -73,7 +80,7 @@ sub in_thread {
 
     my ($measured, $leaked) = split /:/, ($got || '');
     is($measured, $DEPTH,
-       "$DEPTH-deep hash chain clones to full depth on a 2 MB stack");
+       "$DEPTH-deep hash chain clones to full depth on a small stack");
     is($leaked, 0, 'deep hash chain clone is independent of the original');
 }
 
@@ -172,10 +179,10 @@ sub in_thread {
 # Blessings must survive the iterative path at depth.
 {
     my $got = in_thread(sub {
-        my $root = bless { x => undef }, 'Koan::Node';
+        my $root = bless { x => undef }, 'Deep::Node';
         my $curr = $root;
         for (1 .. $DEPTH) {
-            my $next = bless { x => undef }, 'Koan::Node';
+            my $next = bless { x => undef }, 'Deep::Node';
             $curr->{x} = $next;
             $curr = $next;
         }
@@ -183,12 +190,12 @@ sub in_thread {
         my $cloned = clone($root);
 
         my $measured  = 0;
-        my $blessed_ok = ref($cloned) eq 'Koan::Node' ? 1 : 0;
+        my $blessed_ok = ref($cloned) eq 'Deep::Node' ? 1 : 0;
         my $walk       = $cloned;
         while (ref($walk) && ref($walk->{x})) {
             $walk = $walk->{x};
             $measured++;
-            $blessed_ok = 0 if ref($walk) ne 'Koan::Node';
+            $blessed_ok = 0 if ref($walk) ne 'Deep::Node';
         }
         return join ':', $measured, $blessed_ok;
     });

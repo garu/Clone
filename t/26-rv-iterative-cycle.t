@@ -17,7 +17,7 @@ my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $max_depth_val    = $is_limited_stack ? 2000 : 4000;
 my $chain_len        = $max_depth_val + 1000;
 
-plan tests => 3;
+plan tests => 6;
 
 # Build a linear chain of $chain_len RVs whose leaf is a scalar, then
 # splice in a back-edge so the chain becomes cyclic past MAX_DEPTH.
@@ -86,4 +86,34 @@ sub build_cyclic_chain {
     alarm(0);
 
     is(refaddr($r), $orig_addr, "original chain head SV identity unchanged");
+}
+
+# Tests 4-6: a *short* scalar-ref cycle hanging off a deep container spine.
+# The spine pushes rdepth past MAX_DEPTH, so the cycle is first seen by the
+# iterative path and never gets registered in hseen by the recursive one.
+# Before the chain-walk guard was corrected these OOM'd the process.
+{
+    my $spine_depth = int($max_depth_val / 2) + 1000;
+
+    my %shapes = (
+        'self-referential ref'        => sub { my $x; $x = \$x; $x },
+        'ref to a self-referential ref' => sub { my $x; $x = \$x; \$x },
+        'two-node ref cycle'          => sub { my ($a, $b); $a = \$b; $b = \$a; $a },
+    );
+
+    for my $name (sort keys %shapes) {
+        my $root = {};
+        my $curr = $root;
+        for (1 .. $spine_depth) {
+            my $next = {};
+            $curr->{n} = $next;
+            $curr = $next;
+        }
+        $curr->{cyc} = $shapes{$name}->();
+
+        my $cloned = eval { clone($root) };
+        ok(defined($cloned) && ref($cloned) eq 'HASH',
+           "$name past MAX_DEPTH clones without OOM")
+            or diag("Error: " . ($@ || 'clone returned undef'));
+    }
 }
