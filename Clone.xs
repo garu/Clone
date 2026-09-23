@@ -585,6 +585,7 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
 
       { /* clone the mg_ptr pv */
         char *mg_ptr = mg->mg_ptr; /* default */
+        U32 obj_rc = obj_cloned ? SvREFCNT(obj) : 0;
 
         if (mg->mg_len >= 0) {
           /* sv_magic() with non-negative namlen calls savepvn()
@@ -610,15 +611,19 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
                  mg_ptr,
                  mg->mg_len);
 
-        /* sv_magic() takes its own SvREFCNT_inc on obj (setting
-         * MGf_REFCOUNTED) only when obj != clone; a self-referential
-         * mg_obj is stored without a reference to avoid a cycle.
-         * So release the caller reference returned by sv_clone() only
-         * in the obj != clone case -- otherwise the cloned mg_obj leaks
-         * one refcount per clone (DESTROY never fires on the cloned tie
-         * object), while decrementing a self-referential obj would free
-         * an SV the magic still points at. */
-        if (obj_cloned && obj != clone)
+        /* sv_magic() usually takes its own SvREFCNT_inc on obj (setting
+         * MGf_REFCOUNTED), in which case the caller reference returned
+         * by sv_clone() must be released -- otherwise the cloned mg_obj
+         * leaks one refcount per clone (DESTROY never fires on the
+         * cloned tie object).
+         * But it stores mg_obj *unreferenced* in several cases: a
+         * self-referential obj, arylen ('#') / regdata ('D') /
+         * regdatum ('d') / symtab (':') magic, and glob-slot
+         * back-pointers.  That list has changed across perl releases,
+         * so instead of mirroring it here, observe whether the refcount
+         * actually went up.  Decrementing when perl took no reference
+         * would free an SV the magic still points at. */
+        if (obj_cloned && SvREFCNT(obj) > obj_rc)
           SvREFCNT_dec(obj);
       }
     }

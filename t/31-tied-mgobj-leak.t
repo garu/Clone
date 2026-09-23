@@ -18,7 +18,7 @@ use Clone qw(clone);
 BEGIN {
     eval { require B; require Scalar::Util; 1 }
         or plan skip_all => 'B or Scalar::Util not available';
-    plan tests => 5;
+    plan tests => 7;
 }
 
 package TiedHash;
@@ -118,4 +118,17 @@ package main;
 
     is($TiedScalar::destroy_count, 10,
        'tied scalar: DESTROY fires for each cloned tie object');
+}
+
+# Tests 6-7: arylen magic ('#') -- sv_magic() stores mg_obj *without*
+# taking a reference for this type, so the cloned mg_obj must NOT be
+# decremented or the clone is left pointing at freed memory.
+{
+    my @a = (1, 2, 3);
+    my $c = clone(\$#a);
+
+    is($$c, 2, 'arylen: cloned $#a still reads the array last index');
+
+    undef $c;
+    pass('arylen: cloned $#a freed without use-after-free');
 }
