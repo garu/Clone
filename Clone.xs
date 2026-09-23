@@ -932,9 +932,16 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 #if PERL_VERSION >= 38
             /* sv_bless rejects class stashes (Perl 5.38+): set directly */
             if (SvTYPE(SvRV(ref)) == SVt_PVOBJ) {
-                SvOBJECT_on(SvRV(clone));
-                SvSTASH_set(SvRV(clone),
-                            (HV *)SvREFCNT_inc(SvSTASH(SvRV(ref))));
+                SV * const robj = SvRV(clone);
+                HV * const stash = (HV *)SvREFCNT_inc(SvSTASH(SvRV(ref)));
+                /* The referent may come from the hseen cache already
+                 * blessed (same instance in several slots).  Release the
+                 * stash it holds first, exactly as sv_bless does, or the
+                 * stash leaks one reference per extra alias. */
+                if (SvOBJECT(robj))
+                    SvREFCNT_dec(SvSTASH(robj));
+                SvOBJECT_on(robj);
+                SvSTASH_set(robj, stash);
             } else
 #endif
             sv_bless (clone, SvSTASH (SvRV (ref)));
