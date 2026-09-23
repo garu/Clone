@@ -9,7 +9,9 @@ BEGIN {
         unless $] >= 5.038;
     eval { require Scalar::Util; 1 }
         or plan skip_all => 'Scalar::Util not available';
-    plan tests => 12;
+    eval { require B; 1 }
+        or plan skip_all => 'B not available';
+    plan tests => 14;
 }
 
 use Clone qw(clone);
@@ -147,3 +149,27 @@ eval q{
     }
     pass('500 clone/destroy cycles without crash');
 } or die "memory cycles: $@";
+
+# Tests 13-14: an instance referenced twice stays shared in the clone, and
+# re-blessing the cached referent must not leak a reference to the stash.
+eval q{
+    use feature 'class';
+    no warnings 'experimental::class';
+
+    class CloneTestShared {
+        field $value :param;
+        method value { $value }
+    }
+
+    my $obj  = CloneTestShared->new(value => 'x');
+    my $copy = clone({ a => $obj, b => $obj });
+    is(refaddr($copy->{a}), refaddr($copy->{b}),
+       'instance referenced twice stays shared in the clone');
+
+    my $stash = B::svref_2object(\%CloneTestShared::);
+    clone({ a => $obj, b => $obj }) for 1 .. 5;   # warm up
+    my $before = $stash->REFCNT;
+    clone({ a => $obj, b => $obj }) for 1 .. 100;
+    is($stash->REFCNT, $before,
+       'cloning an aliased instance does not leak stash references');
+} or die "shared instance: $@";
