@@ -36,8 +36,8 @@ use Scalar::Util qw(weaken isweak blessed refaddr);
     my %desc_for_val = (latin1 => 'latin-1', wide => 'kanji',
                         mixed => 'mixed', plain => 'ascii');
     for my $v (sort values %orig) {
-        my ($ok, $ck) = grep { ($orig{$_} // '') eq $v } keys %orig;
-        my ($cc)      = grep { ($c->{$_} // '') eq $v  } keys %$c;
+        my ($ok) = grep { defined $orig{$_} && $orig{$_} eq $v } keys %orig;
+        my ($cc) = grep { defined $c->{$_}  && $c->{$_}  eq $v } keys %$c;
         ok(defined $cc, "UTF-8: $desc_for_val{$v} key exists in clone");
         SKIP: {
             skip "key not found in clone", 1 unless defined $cc;
