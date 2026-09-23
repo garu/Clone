@@ -35,6 +35,7 @@ eval q{
     is(ref($copy), 'CloneTestPoint', 'clone preserves class name');
     is($copy->x(), 3, 'clone preserves field x');
     is($copy->y(), 7, 'clone preserves field y');
+    1;
 } or die "basic field cloning: $@";
 
 # Tests 4-5: field independence (clone mutation does not affect original)
@@ -55,6 +56,7 @@ eval q{
 
     is($copy->count(), 2, 'cloned counter incremented independently');
     is($orig->count(), 0, 'original counter unchanged');
+    1;
 } or die "field independence: $@";
 
 # Tests 6-7: nested class objects are deep-cloned
@@ -79,6 +81,7 @@ eval q{
     is($copy->child()->val(), 42, 'nested class field value preserved');
     isnt(refaddr($outer->child()), refaddr($copy->child()),
          'nested class object is a separate instance');
+    1;
 } or die "nested class: $@";
 
 # Tests 8-9: reference fields are deep-cloned (not shared)
@@ -98,6 +101,7 @@ eval q{
     $copy->data()->{a} = 99;
     is($orig->data()->{a}, 1, 'original ref field unchanged after clone mutation');
     is($copy->data()->{a}, 99, 'cloned ref field holds mutated value');
+    1;
 } or die "ref field isolation: $@";
 
 # Test 10: class object inside a circular hash structure
@@ -117,6 +121,7 @@ eval q{
     my $copy = clone($container);
     is($copy->{node}->value(), 'hello',
        'class object inside circular structure cloned correctly');
+    1;
 } or die "circular structure: $@";
 
 # Test 11: depth-limited clone still produces a blessed object
@@ -132,9 +137,10 @@ eval q{
     my $orig = CloneTestSimple->new(v => 10);
     my $copy = clone($orig, 2);
     is(ref($copy), 'CloneTestSimple', 'depth-limited clone preserves class');
+    1;
 } or die "depth limit: $@";
 
-# Test 12: no memory leak over many clone/destroy cycles
+# Test 12: survives repeated clone/destroy cycles
 eval q{
     use feature 'class';
     no warnings 'experimental::class';
@@ -147,7 +153,8 @@ eval q{
     for (1 .. 500) {
         my $tmp = clone($before);
     }
-    pass('500 clone/destroy cycles without crash');
+    pass('survives 500 clone/destroy cycles');
+    1;
 } or die "memory cycles: $@";
 
 # Tests 13-14: an instance referenced twice stays shared in the clone, and
@@ -172,4 +179,5 @@ eval q{
     clone({ a => $obj, b => $obj }) for 1 .. 100;
     is($stash->REFCNT, $before,
        'cloning an aliased instance does not leak stash references');
+    1;
 } or die "shared instance: $@";
