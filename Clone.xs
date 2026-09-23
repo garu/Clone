@@ -728,6 +728,13 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       case SVt_PVOBJ:	/* 16 — class instances (Perl 5.38+) */
         clone = newSV(0);
         sv_upgrade(clone, SVt_PVOBJ);
+        /* Establish the empty-field state explicitly rather than trusting
+         * sv_upgrade to have done it: the field-cloning block below only
+         * runs when the source has at least one field, so a field-less
+         * class would otherwise ship whatever the upgrade left behind and
+         * sv_clear would walk it at free time. */
+        ObjectFIELDS(clone) = NULL;
+        ObjectMAXFIELD(clone) = -1;
         break;
 #endif
       #if PERL_VERSION <= 8
