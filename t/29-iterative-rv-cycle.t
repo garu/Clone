@@ -3,7 +3,7 @@
 # Test that circular scalar-ref chains embedded past MAX_DEPTH are cloned
 # correctly (no infinite loop, proper cycle topology in clone).
 #
-# Bug: rv_clone_iterative walked the RV chain without checking hseen or
+# Bug: the iterative RV-chain walk (rv_clone_chain) walked without checking hseen or
 # detecting cycles.  A circular pair ($a = \$b; $b = \$a) embedded past
 # MAX_DEPTH caused an infinite loop and eventual memory exhaustion.
 
