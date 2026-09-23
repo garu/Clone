@@ -8,15 +8,28 @@
 #define CLONE_KEY(x) ((char *) &x)
 
 /* Maximum safe nesting depth before switching to iterative mode.
- * Each nesting level of [[[...]]] consumes ~3 C stack frames in the
- * recursive clone path (sv_clone for RV + sv_clone for AV + av_clone),
- * using ~450 bytes of stack each.
  *
  * The rdepth counter increments once per RV dereference (i.e. per
  * nesting level), NOT on every sv_clone() call.  Sibling elements
  * within an array or hash do not increase rdepth, so wide structures
  * (flat arrays/hashes with many elements) never falsely trigger the
  * iterative fallback.
+ *
+ * Per-rdepth C stack cost is shape dependent, and MAX_DEPTH is sized
+ * for the expensive shape:
+ *  - container nesting ([[[...]]] or {{{...}}}) costs ~3 frames per
+ *    rdepth (sv_clone for the RV + sv_clone for the AV/HV + av_clone/
+ *    hv_clone), ~450 bytes total;
+ *  - scalar-ref chains (\\\$x repeated) cost 1 frame per rdepth,
+ *    roughly a third of that.
+ * So scalar chains reach MAX_DEPTH having used ~1/3 the stack a
+ * container spine of the same rdepth would — they are the shape that
+ * enters the iterative path with the most headroom to spare, not the
+ * one the bound is protecting.  Raising MAX_DEPTH to postpone that
+ * would buy nothing for scalar chains without also letting container
+ * spines run ~50% deeper in stack terms, which is what GH #77 was.
+ * Past MAX_DEPTH every shape is handled by the heap work queue, whose
+ * C stack usage is O(1) in the nesting depth.
  *
  * Windows has a 1 MB default thread stack; Cygwin typically 2 MB.
  * Linux/macOS default to 8 MB but some CPAN smokers and containers

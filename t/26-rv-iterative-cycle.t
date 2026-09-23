@@ -96,7 +96,10 @@ sub build_cyclic_chain {
 # iterative path and never gets registered in hseen by the recursive one.
 # Before the chain-walk guard was corrected these OOM'd the process.
 {
-    my $spine_depth = int($max_depth_val / 2) + 1000;
+    # rdepth now counts one level per RV dereference, so the spine depth
+    # must exceed MAX_DEPTH outright (not MAX_DEPTH/2) to reach the
+    # iterative path with a comfortable margin.
+    my $spine_depth = $max_depth_val + 1000;
 
     my %shapes = (
         'self-referential ref'        => sub { my $x; $x = \$x; $x },
