@@ -7,41 +7,31 @@
 
 #define CLONE_KEY(x) ((char *) &x)
 
-/* Maximum safe nesting depth before switching to iterative mode.
+/* Maximum safe recursion depth before switching to iterative mode.
+ * Each nesting level of [[[...]]] consumes ~3 C stack frames in the
+ * recursive clone path (sv_clone for RV + sv_clone for AV + av_clone).
+ * The rdepth counter increments once per sv_clone() call, so the
+ * nesting level is roughly rdepth/2, using ~450 bytes of stack each.
  *
- * The rdepth counter increments once per RV dereference (i.e. per
- * nesting level), NOT on every sv_clone() call.  Sibling elements
- * within an array or hash do not increase rdepth, so wide structures
- * (flat arrays/hashes with many elements) never falsely trigger the
- * iterative fallback.
- *
- * Per-rdepth C stack cost is shape dependent, and MAX_DEPTH is sized
- * for the expensive shape:
- *  - container nesting ([[[...]]] or {{{...}}}) costs ~3 frames per
- *    rdepth (sv_clone for the RV + sv_clone for the AV/HV + av_clone/
- *    hv_clone), ~450 bytes total;
- *  - scalar-ref chains (\\\$x repeated) cost 1 frame per rdepth,
- *    roughly a third of that.
- * So scalar chains reach MAX_DEPTH having used ~1/3 the stack a
- * container spine of the same rdepth would — they are the shape that
- * enters the iterative path with the most headroom to spare, not the
- * one the bound is protecting.  Raising MAX_DEPTH to postpone that
- * would buy nothing for scalar chains without also letting container
- * spines run ~50% deeper in stack terms, which is what GH #77 was.
- * Past MAX_DEPTH every shape is handled by the heap work queue, whose
- * C stack usage is O(1) in the nesting depth.
+ * rdepth is passed BY VALUE, so it measures the depth of the current
+ * sv_clone() call chain — not the number of calls made.  Sibling
+ * elements in the av_clone/hv_clone element loops each receive the
+ * same parent rdepth, so width does not accumulate: a flat array of
+ * N elements peaks at rdepth 3 regardless of N.  Only nesting raises
+ * it (~2 units per [[[...]]] level, 1 per scalar-ref chain link).
+ * Do not "fix" width-driven rdepth inflation; it does not occur.
  *
  * Windows has a 1 MB default thread stack; Cygwin typically 2 MB.
  * Linux/macOS default to 8 MB but some CPAN smokers and containers
  * may have 4 MB or less available after Perl/harness overhead.
  *
- * MAX_DEPTH=1000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
- * MAX_DEPTH=2000 elsewhere         -> ~2000 nesting levels -> ~900 KB.
+ * MAX_DEPTH=2000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
+ * MAX_DEPTH=4000 elsewhere        -> ~2000 nesting levels -> ~900 KB.
  * (GH #77: 32000 was too aggressive — caused SEGV on CPAN smokers.) */
 #if defined(_WIN32) || defined(__CYGWIN__)
-#define MAX_DEPTH 1000
-#else
 #define MAX_DEPTH 2000
+#else
+#define MAX_DEPTH 4000
 #endif
 
 #define CLONE_STORE(x,y)						\
@@ -680,16 +670,13 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     if (!ref)
         return NULL;
 
-    /* Note: rdepth is NOT incremented here.  It is incremented only when
-     * following an RV dereference (the sole source of recursive nesting).
-     * Sibling calls from av_clone/hv_clone element loops keep the same
-     * rdepth, so a flat array of N elements never falsely triggers the
-     * iterative fallback regardless of N. */
+    rdepth++;
 
-    /* Check for deep nesting and switch to iterative mode.
-     * A deeply nested arrayref like [[[...]]] consumes ~3 C stack frames
-     * per nesting level.  When we exceed MAX_DEPTH nesting levels,
-     * switch to iterative handlers for AV, HV, and RV types. */
+    /* Check for deep recursion and switch to iterative mode.
+     * A deeply nested arrayref like [[[...]]] alternates between RV and AV
+     * at each level, consuming ~3 C stack frames per nesting level.
+     * On Windows (1MB default stack), this overflows around depth 2000.
+     * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
     if (rdepth > MAX_DEPTH) {
         if (SvTYPE(ref) == SVt_PVAV || SvTYPE(ref) == SVt_PVHV) {
             return clone_container_iterative(ref, hseen, rdepth, weakrefs);
@@ -973,7 +960,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       {
         TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
         SvREFCNT_dec(SvRV(clone));
-        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth + 1, weakrefs); /* Clone the referent */
+        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
         if (SvOBJECT(SvRV(ref)))
         {
 #if PERL_VERSION >= 38

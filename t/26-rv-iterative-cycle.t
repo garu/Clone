@@ -14,7 +14,7 @@ use Scalar::Util qw(refaddr);
 # chain to push rdepth past MAX_DEPTH first, then close a back-edge.
 
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
-my $max_depth_val    = $is_limited_stack ? 1000 : 2000;
+my $max_depth_val    = $is_limited_stack ? 2000 : 4000;
 my $chain_len        = $max_depth_val + 1000;
 
 plan tests => 6;
@@ -29,13 +29,10 @@ sub build_cyclic_chain {
         $slots[$i] = $r;                       # slot i holds previous RV
         $r = \$slots[$i];                      # RV -> slot i
     }
-    # Close the cycle: slot 0 points back into the upper quarter of the
-    # chain.  The target must sit in the recursive range (processed by
-    # sv_clone before rdepth exceeds MAX_DEPTH) so that hseen already
-    # contains it when rv_clone_iterative walks into the back-edge.
-    # 3/4 of chain_len is safely above MAX_DEPTH from the bottom on
-    # all platforms.
-    $slots[0] = \$slots[ int($chain_len * 3 / 4) ];
+    # Close the cycle deep in the chain: slot 0 now points back into slot N/2.
+    # Walking SvRV from $r eventually reaches slot 0, which now resolves to
+    # slot N/2, looping forever absent a cycle guard.
+    $slots[0] = \$slots[ int($chain_len / 2) ];
     return ($r, \@slots);  # return @slots too so it stays alive
 }
 
@@ -96,10 +93,7 @@ sub build_cyclic_chain {
 # iterative path and never gets registered in hseen by the recursive one.
 # Before the chain-walk guard was corrected these OOM'd the process.
 {
-    # rdepth now counts one level per RV dereference, so the spine depth
-    # must exceed MAX_DEPTH outright (not MAX_DEPTH/2) to reach the
-    # iterative path with a comfortable margin.
-    my $spine_depth = $max_depth_val + 1000;
+    my $spine_depth = int($max_depth_val / 2) + 1000;
 
     my %shapes = (
         'self-referential ref'        => sub { my $x; $x = \$x; $x },
