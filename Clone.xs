@@ -610,12 +610,15 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
                  mg_ptr,
                  mg->mg_len);
 
-        /* sv_magic() takes its own SvREFCNT_inc on obj (when non-NULL
-         * and obj != clone).  If obj was returned by sv_clone() above,
-         * the caller holds an extra reference that must be released;
-         * otherwise the cloned mg_obj leaks one refcount per clone
-         * (DESTROY never fires on the cloned tie object). */
-        if (obj_cloned)
+        /* sv_magic() takes its own SvREFCNT_inc on obj (setting
+         * MGf_REFCOUNTED) only when obj != clone; a self-referential
+         * mg_obj is stored without a reference to avoid a cycle.
+         * So release the caller reference returned by sv_clone() only
+         * in the obj != clone case -- otherwise the cloned mg_obj leaks
+         * one refcount per clone (DESTROY never fires on the cloned tie
+         * object), while decrementing a self-referential obj would free
+         * an SV the magic still points at. */
+        if (obj_cloned && obj != clone)
           SvREFCNT_dec(obj);
       }
     }
