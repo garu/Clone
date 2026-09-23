@@ -72,7 +72,10 @@ static SV *rv_clone_iterative(SV *, HV *, int, AV *);
 static int clone_magic(SV *, SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
-#define TRACEME(a) do { printf("%s:%d: ",__func__, __LINE__); printf a; } while (0)
+/* __FUNCTION__ is supported by GCC, Clang and MSVC (all versions);
+ * __func__ needs C99 (MSVC only since VS2015) and is rejected by a
+ * strict -std=c89 -pedantic build. */
+#define TRACEME(a) do { printf("%s:%d: ",__FUNCTION__, __LINE__); printf a; } while (0)
 #else
 #define TRACEME(a)
 #endif
