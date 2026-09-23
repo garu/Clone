@@ -11,7 +11,7 @@ BEGIN {
         or plan skip_all => 'Scalar::Util not available';
     eval { require B; 1 }
         or plan skip_all => 'B not available';
-    plan tests => 14;
+    plan tests => 17;
 }
 
 use Clone qw(clone);
@@ -181,3 +181,26 @@ eval q{
        'cloning an aliased instance does not leak stash references');
     1;
 } or die "shared instance: $@";
+
+# Tests 15-17: a class with no fields at all.  The field-cloning block is
+# skipped entirely for these (MAXFIELD is -1), so the clone's field array
+# must already be in a valid empty state or freeing it walks garbage.
+eval q{
+    use feature 'class';
+    no warnings 'experimental::class';
+
+    class CloneTestMarker {
+        method tag { 'm' }
+    }
+
+    my $orig = CloneTestMarker->new;
+    my $copy = clone($orig);
+
+    is(ref($copy), 'CloneTestMarker', 'field-less class name preserved');
+    is($copy->tag(), 'm', 'field-less clone responds to methods');
+    isnt(refaddr($orig), refaddr($copy), 'field-less clone is a new instance');
+
+    undef $copy;                              # free the clone explicitly
+    for (1 .. 200) { my $tmp = clone($orig) } # and repeatedly
+    1;
+} or die "field-less class: $@";
