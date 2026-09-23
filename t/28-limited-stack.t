@@ -1,10 +1,10 @@
 #!/usr/bin/perl
 
-# GH #146: t/10-deep_recursion.t crashed on Windows (1 MB default thread
-# stack) from Clone 0.50 on.  Past MAX_DEPTH the array path unrolls
-# single-element chains iteratively, but the hash and mixed array/hash
-# paths still consumed one C stack frame per nesting level through the
-# hv_clone_iterative <-> sv_clone mutual recursion, so deep hash
+# GH #121, GH #146: t/10-deep_recursion.t crashed on Windows (1 MB
+# default thread stack) from Clone 0.50 on.  Past MAX_DEPTH the array
+# path unrolled single-element chains iteratively, but hash and mixed
+# array/hash paths still consumed one C stack frame per nesting level
+# through the hv_clone_iterative <-> sv_clone mutual recursion, so deep hash
 # structures blew the stack where equally deep array structures did not.
 #
 # Reproduce platform-independently by cloning inside a thread with an
