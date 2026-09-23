@@ -12,7 +12,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 36;
+use Test::More tests => 43;
 use Scalar::Util qw(refaddr weaken isweak blessed);
 use Clone qw(clone);
 
@@ -121,6 +121,45 @@ use Clone qw(clone);
 }
 
 # ---------------------------------------------------------------------------
+# depth < -1: still unlimited (sv_clone only short-circuits on exactly 0).
+# hv_clone decrements negative depths (-2, -3, ...) while av_clone clamps to
+# -1, so exercise both container types in the same structure.
+# ---------------------------------------------------------------------------
+
+{
+    my $leaf = {z => 1};
+    my $mid  = [$leaf];
+    my $top  = {list => $mid};
+    my $c = clone($top, -2);
+
+    isnt(refaddr($top), refaddr($c),
+         "depth=-2: top hash cloned");
+    isnt(refaddr($mid), refaddr($c->{list}),
+         "depth=-2: mid array cloned");
+    isnt(refaddr($leaf), refaddr($c->{list}[0]),
+         "depth=-2: leaf hash cloned (negative depth stays unlimited)");
+}
+
+# ---------------------------------------------------------------------------
+# depth greater than the actual nesting: indistinguishable from -1
+# ---------------------------------------------------------------------------
+
+{
+    my $inner = {b => 1};
+    my $top   = {a => $inner};
+    my $c = clone($top, 10);
+
+    isnt(refaddr($top), refaddr($c),
+         "depth=10: top cloned");
+    isnt(refaddr($inner), refaddr($c->{a}),
+         "depth=10: inner cloned");
+    isnt(refaddr(\$inner->{b}), refaddr(\$c->{a}{b}),
+         "depth=10: leaf scalar cloned (depth exceeds nesting)");
+    is($c->{a}{b}, 1,
+       "depth=10: leaf value preserved");
+}
+
+# ---------------------------------------------------------------------------
 # Mixed array/hash structures with depth
 # ---------------------------------------------------------------------------
 
@@ -142,7 +181,7 @@ use Clone qw(clone);
 
     isnt(refaddr($deep->{list}[0]), refaddr($c->{list}[0]),
          "depth=3 mixed: nested hash cloned (within depth)");
-    is(refaddr($deep->{list}[0]{name}), refaddr($c->{list}[0]{name}),
+    is(refaddr(\$deep->{list}[0]{name}), refaddr(\$c->{list}[0]{name}),
        "depth=3 mixed: leaf scalar shared beyond depth");
 }
 
