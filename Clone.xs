@@ -132,8 +132,8 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
  * The previous implementation only unrolled single-element array chains
  * and otherwise recursed back through sv_clone, costing one C stack
  * frame per nesting level for hashes and mixed array/hash structures.
- * That overflowed Windows' 1 MB default thread stack (GH #146).  The
- * queue makes C stack usage O(1) in the nesting depth for every shape.
+ * That overflowed Windows' 1 MB default thread stack (GH #121, GH #146).
+ * The queue makes C stack usage O(1) in the nesting depth for every shape.
  * ------------------------------------------------------------------- */
 
 /* Registered with SAVEDESTRUCTOR_X so the queue is released both on the
