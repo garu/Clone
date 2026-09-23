@@ -127,7 +127,6 @@ jobs:
       matrix:
         os-version:
           - debian:trixie
-          - debian:bullseye
           - debian:bookworm
           - ubuntu:22.04
 
