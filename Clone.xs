@@ -672,13 +672,13 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
     rdepth++;
 
-    /* depth == 0 means "share, don't clone" — honour this before
-     * the MAX_DEPTH iterative fallback.  rdepth counts total sv_clone
-     * calls (including sibling elements in flat arrays/hashes), so a
-     * wide structure like a 5000-element array can push rdepth past
-     * MAX_DEPTH even at shallow nesting.  Without this early check,
-     * elements beyond ~MAX_DEPTH would be deep-copied instead of
-     * shared when the caller requested depth 0. */
+    /* depth == 0 means "share, don't clone" — honour it before the
+     * MAX_DEPTH iterative fallback below.  Both can trigger on the same
+     * call: rdepth advances two per nesting level while depth drops one,
+     * so a chain nested MAX_DEPTH/2 levels deep and cloned with that same
+     * explicit depth reaches depth 0 exactly as rdepth crosses MAX_DEPTH.
+     * Checking depth later let the fallback intercept that call and
+     * deep-copy a leaf the caller asked to share. */
     if (depth == 0)
         return SvREFCNT_inc(ref);
 
