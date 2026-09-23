@@ -13,11 +13,11 @@ use Config;
 # The depths must be safe for both Clone XS recursion AND Perl's
 # own recursive SvREFCNT_dec when freeing deeply nested structures.
 #
-# Clone.xs uses MAX_DEPTH to switch from recursive to iterative cloning:
-# 1000 on Windows/Cygwin, 2000 elsewhere.  rdepth increments once per
-# RV dereference (i.e. once per nesting level), so the switch happens
-# at exactly MAX_DEPTH nesting levels.
-# The deep target must exceed MAX_DEPTH to exercise both paths.
+# Clone.xs uses MAX_DEPTH (in rdepth units) to switch from recursive
+# to iterative cloning: 2000 on Windows/Cygwin, 4000 elsewhere.
+# rdepth increments twice per nesting level (once for AV, once for RV),
+# so the switch happens at roughly MAX_DEPTH/2 nesting levels.
+# The deep target must exceed MAX_DEPTH/2 to exercise both paths.
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 
 my $deep_target     = $is_limited_stack ? 2500 : 5000;
@@ -112,7 +112,7 @@ my $moderate_target  = 1000;
 }
 
 # Test 8-10: Deep recursion with hashes (GH #93)
-# At depth > MAX_DEPTH, the guard previously returned SvREFCNT_inc(ref)
+# At depth > MAX_DEPTH/2, the guard previously returned SvREFCNT_inc(ref)
 # for hash types, silently aliasing inner nodes instead of deep-copying them.
 {
     my $deep_hash = {x => undef};
@@ -147,7 +147,7 @@ my $moderate_target  = 1000;
            "Cloned hash structure should maintain full depth ($deep_target levels)");
 
         # Verify clone independence at deep nodes: navigate to a node past
-        # MAX_DEPTH in both original and clone, then mutate the clone and
+        # MAX_DEPTH/2 in both original and clone, then mutate the clone and
         # verify the original is unaffected (proves deep copy, not aliasing).
         my $depth_target = $is_limited_stack ? 1500 : 2500;
         my $walk_orig = $deep_hash;
@@ -211,12 +211,11 @@ my $moderate_target  = 1000;
 # Tests 14-17: Deep scalar ref chains past MAX_DEPTH — iterative cloning
 # (GH #107: shallow copy silently violated isolation for deeply nested scalar refs)
 #
-# Each scalar ref is one RV dereference = 1 rdepth, so we need > MAX_DEPTH
-# levels to exercise the iterative guard.  We must build a true chain via
-# an array of refs, not "$ref = \$ref" which creates a cycle (back to the
-# same SV).
+# Each scalar ref adds 1 rdepth, so we need > MAX_DEPTH levels to exercise
+# the MAX_DEPTH guard.  We must build a true chain via an array of refs, not
+# "$ref = \$ref" which creates a cycle (back to the same SV).
 {
-    my $max_depth_val = $is_limited_stack ? 1000 : 2000;
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
     my $ref_depth     = $max_depth_val + 500;
 
     # Chain: $chain[0] = \$leaf_val,  $chain[i] = \$chain[i-1]
@@ -285,11 +284,11 @@ my $moderate_target  = 1000;
 # RV-to-AV and RV-to-HV created wrapper RVs without checking SvWEAKREF,
 # silently converting weak references into strong ones.
 {
-    my $max_depth_val = $is_limited_stack ? 1000 : 2000;
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
 
-    # Build a deeply nested AV that exceeds MAX_DEPTH nesting levels.
+    # Build a deeply nested AV that exceeds MAX_DEPTH/2 nesting levels.
     # Then create a structure where a weak ref points to an inner node.
-    my $target_depth = $max_depth_val + 200;
+    my $target_depth = int($max_depth_val / 2) + 200;
 
     # Create the deep array chain
     my $deep_av = [];
@@ -335,53 +334,74 @@ my $moderate_target  = 1000;
     }
 }
 
-# Tests 23-25: Wide structures (many siblings) must NOT trigger iterative path
-# Before the fix, rdepth incremented on every sv_clone call (including sibling
-# elements in arrays/hashes), causing a flat array of >MAX_DEPTH elements to
-# falsely trigger the iterative fallback.  Now rdepth counts only RV
-# dereferences (nesting levels), so sibling elements never inflate it.
+# Tests 24-28: width must not consume the depth budget.
+#
+# rdepth is passed by value, so sibling elements in the av_clone/hv_clone
+# loops all receive the same parent rdepth and width never accumulates it
+# (a flat array peaks at rdepth 3 regardless of element count).  These
+# tests lock that property in against a future change that makes rdepth
+# width-sensitive.
+#
+# Correct cloning alone cannot detect such a regression -- the iterative
+# cloner is a correct deep-copier too, so element counts and mutation
+# isolation hold on both paths.  The one externally visible difference is
+# the $Clone::WARN message: a non-cloneable leaf (a glob) is shared
+# silently on the recursive path, but past MAX_DEPTH the iterative path
+# warns once per such leaf.  Test 27 is the positive control proving that
+# signal is live, which is what gives the silence in tests 24/26 meaning.
 {
-    my $max_depth_val = $is_limited_stack ? 1000 : 2000;
-    my $width = $max_depth_val * 3;  # well above MAX_DEPTH
+    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $width = $max_depth_val * 3;  # far more elements than MAX_DEPTH
 
-    # Test 23: flat array with more elements than MAX_DEPTH
-    my @wide = (1 .. $width);
-    my $cloned = eval { clone(\@wide) };
-    ok(!$@ && defined($cloned),
-       "flat array of $width elements clones without error")
-        or diag("Error: $@");
+    # Test 24: a flat array of non-cloneable leaves must stay on the
+    # recursive path, i.e. clone silently.
+    my @wide = (*STDOUT) x $width;
+    my @warnings;
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        clone(\@wide);
+    };
+    is(scalar @warnings, 0,
+       "flat array of $width glob leaves clones with no depth-limit warning "
+       . "(width must not trigger the iterative path)")
+        or diag("Warnings: @warnings");
 
-    # Test 24: cloned array has correct contents
-    SKIP: {
-        skip "Clone failed", 1 unless defined $cloned;
-        is(scalar @$cloned, $width,
-           "flat array clone has correct element count ($width)");
+    # Test 25: and it is still a correct clone.
+    is(ref($cloned) eq 'ARRAY' ? scalar @$cloned : -1, $width,
+       "flat array clone has correct element count ($width)");
+
+    # Test 26: same for a wide hash.
+    my %wide = map { ("key_$_" => *STDOUT) } 1 .. $width;
+    @warnings = ();
+    my $hclone = eval {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        clone(\%wide);
+    };
+    is(scalar @warnings, 0,
+       "flat hash of $width glob leaves clones with no depth-limit warning")
+        or diag("Warnings: @warnings");
+
+    is(ref($hclone) eq 'HASH' ? scalar keys %$hclone : -1, $width,
+       "flat hash clone has correct key count ($width)");
+
+    # Test 27: positive control -- the same glob leaf, reached by *nesting*
+    # past MAX_DEPTH, must warn.  Without this, tests 24/26 could pass
+    # simply because the warning never fires at all.
+    my $deep = [];
+    my $curr = $deep;
+    for (1 .. $deep_target) {
+        my $next = [];
+        $curr->[0] = $next;
+        $curr = $next;
     }
-
-    # Test 25: clone is a deep copy, not aliased
-    SKIP: {
-        skip "Clone failed", 1 unless defined $cloned;
-        $cloned->[0] = "changed";
-        is($wide[0], 1,
-           "flat array clone is independent (mutation does not affect original)");
+    $curr->[1] = *STDOUT;
+    @warnings = ();
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        clone($deep);
     }
-}
-
-# Test 26-27: Wide hash with more keys than MAX_DEPTH
-{
-    my $max_depth_val = $is_limited_stack ? 1000 : 2000;
-    my $width = $max_depth_val * 3;
-
-    my %wide = map { ("key_$_" => $_) } 1 .. $width;
-    my $cloned = eval { clone(\%wide) };
-    ok(!$@ && defined($cloned),
-       "flat hash of $width keys clones without error")
-        or diag("Error: $@");
-
-    SKIP: {
-        skip "Clone failed", 1 unless defined $cloned;
-        $cloned->{key_1} = "changed";
-        is($wide{key_1}, 1,
-           "flat hash clone is independent (mutation does not affect original)");
-    }
+    ok(scalar(@warnings) > 0 && $warnings[0] =~ /depth limit/,
+       "positive control: glob leaf nested $deep_target levels deep does warn "
+       . "(depth-limit signal is live)")
+        or diag("Warnings: @warnings");
 }
