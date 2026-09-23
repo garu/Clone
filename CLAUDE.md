@@ -29,7 +29,7 @@ t/                # 20 test files (00-cow.t through 19-dualvar.t)
 - **`hv_clone()` / `av_clone()`** — recursive hash/array cloning
 - **`rv_clone()`** — reference cloning with circular-ref detection via `hseen` HV
 - **Circular refs** — tracked in a seen-hash (`hseen`); already-cloned SVs return cached copy
-- **Deep recursion** — switches to iterative mode (`av_clone_iterative`) after `MAX_DEPTH` (4000 on Linux/macOS, 2000 on Windows/Cygwin)
+- **Deep recursion** — past `MAX_DEPTH` (4000 on Linux/macOS, 2000 on Windows/Cygwin) containers are cloned through a heap work queue (`clone_container_iterative` / `clone_shell` / `clone_drain`) and scalar-ref chains through `rv_clone_iterative`, so C stack usage is O(1) in nesting depth for every shape
 - **Weakrefs** — deferred weakening: builds full clone graph first, then weakens at the end
 
 ### Magic handling (key gotchas)

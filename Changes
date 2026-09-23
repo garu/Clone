@@ -1,5 +1,9 @@
 Revision history for Perl module Clone
 
+0.51 (unreleased)
+  - fix: clone deep hash and mixed array/hash structures past MAX_DEPTH
+    without C stack growth (GH #121, GH #146)
+
 0.50 2026-03-28 atoomic
   - fix: deep-copy HVs past MAX_DEPTH instead of aliasing (GH #93)
   - fix: strip macOS xattrs from dist directory before packaging
