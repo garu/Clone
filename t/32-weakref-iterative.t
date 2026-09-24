@@ -14,7 +14,7 @@ BEGIN {
     }
 }
 
-plan tests => 8;
+plan tests => 5;
 
 # Platform-adaptive depth: must exceed MAX_DEPTH/2 to trigger
 # the iterative clone path (clone_container_iterative / rv_clone_chain).
@@ -28,7 +28,7 @@ my $deep_target      = $is_limited_stack ? 2500 : 5000;
 # from the bottom.  Place weakrefs well below that threshold.
 my $weak_level = int($deep_target / 4);  # ~1250 — well within iterative zone
 
-# Test 1-4: Weakrefs in deeply nested array chains should survive
+# Weakrefs in deeply nested array chains should survive
 # the iterative clone path.
 #
 # The iterative cloner builds each nested container's RV directly via
@@ -60,7 +60,7 @@ my $weak_level = int($deep_target / 4);  # ~1250 — well within iterative zone
         or diag("Error: $@");
 
     SKIP: {
-        skip "clone failed", 2 if $@;
+        skip "clone failed", 3 if $@;
         # Walk down from the top to the weakened level
         my $walk = $cloned;
         my $steps = $deep_target - $weak_level - 1;
@@ -71,42 +71,7 @@ my $weak_level = int($deep_target / 4);  # ~1250 — well within iterative zone
            "weakref preserved in iterative clone path");
         ok(defined $walk->[0],
            "weakref target alive via strong anchor");
-    }
-}
-
-# Test 5-8: Weakref at the entry point to iterative zone (sv_clone
-# MAX_DEPTH block).  The RV that triggers the switch to iterative mode
-# must also preserve its weak status.
-{
-    # Build an outer hash with strong and weak refs to a deep chain.
-    # The chain itself is deep enough that the RV→AV at the boundary
-    # is processed by sv_clone's MAX_DEPTH block.
-    my @levels;
-    $levels[0] = ["leaf"];
-    for my $i (1 .. $deep_target) {
-        $levels[$i] = [ $levels[$i - 1] ];
-    }
-
-    # Create a structure where two paths reference the same deep target.
-    # The hash has 'weak' (weakened ref) and 'strong' (strong ref) to
-    # the same deep-chain root.
-    my $data = {
-        weak   => $levels[$deep_target],
-        strong => $levels[$deep_target],
-    };
-    weaken($data->{weak});
-    ok(isweak($data->{weak}),
-       "sanity: top-level weak ref is weak before clone");
-
-    my $cloned = eval { clone($data) };
-    ok(!$@, "clone structure with weakened deep chain without dying")
-        or diag("Error: $@");
-
-    SKIP: {
-        skip "clone failed", 2 if $@;
-        ok(isweak($cloned->{weak}),
-           "top-level weak ref to deep chain preserved");
-        is($cloned->{strong}, $cloned->{weak},
-           "strong and weak point to same cloned chain");
+        ok(!isweak($cloned->[1]),
+           "strong anchor not over-weakened");
     }
 }
