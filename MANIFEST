@@ -37,6 +37,7 @@ t/26-rv-iterative-cycle.t
 t/27-rv-iterative-noncloneable.t
 t/28-limited-stack.t
 t/29-class-objects.t
+t/29-depth-zero-boundary.t
 t/30-edge-cases.t
 t/31-depth-parameter.t
 t/dclone.t
