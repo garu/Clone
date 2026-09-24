@@ -39,6 +39,7 @@ t/28-limited-stack.t
 t/29-class-objects.t
 t/30-edge-cases.t
 t/31-tied-mgobj-leak.t
+t/31-depth-parameter.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
