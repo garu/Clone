@@ -376,7 +376,14 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
      * revisit visible: CLONE_FETCH below then terminates the walk and the
      * rebuild closes the cycle onto the placeholder.  The placeholder is a
      * live RV (to undef) rather than an empty SV so the rebuild can simply
-     * retarget it, exactly as the recursive path does in sv_clone. */
+     * retarget it, exactly as the recursive path does in sv_clone.
+     *
+     * The ordering matters for more than cycles: each node joins chain[]
+     * before we descend into its referent, so a referent found cached on
+     * the next iteration still has its wrapping RV in the chain and the
+     * rebuild produces a proper RV->referent_clone.  Checking the referent
+     * before adding the wrapper would hand a bare HV/AV back to a caller
+     * expecting an RV ("Bizarre copy of HASH"). */
     leaf_clone = NULL;
     current = ref;
     while (current && SvROK(current)) {
