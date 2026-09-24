@@ -7,14 +7,14 @@ use Clone qw(clone);
 use Config;
 
 BEGIN {
-    eval 'use Scalar::Util qw( weaken isweak );';
+    eval 'use Scalar::Util qw( weaken isweak refaddr );';
     if ($@) {
         plan skip_all => "Scalar::Util::weaken not available";
         exit;
     }
 }
 
-plan tests => 5;
+plan tests => 7;
 
 # Platform-adaptive depth: must exceed MAX_DEPTH/2 to trigger
 # the iterative clone path (clone_container_iterative / rv_clone_chain).
@@ -60,18 +60,26 @@ my $weak_level = int($deep_target / 4);  # ~1250 — well within iterative zone
         or diag("Error: $@");
 
     SKIP: {
-        skip "clone failed", 3 if $@;
-        # Walk down from the top to the weakened level
-        my $walk = $cloned;
-        my $steps = $deep_target - $weak_level - 1;
-        for (1 .. $steps) {
+        skip "clone failed", 5 if $@;
+        # Walk down from the top to the weakened level.
+        # Guard on ref() so a truncated clone fails an assertion
+        # instead of dying with "undefined value as an ARRAY reference".
+        my $walk   = $cloned;
+        my $steps  = $deep_target - $weak_level - 1;
+        my $walked = 0;
+        while ( $walked < $steps && ref($walk) eq 'ARRAY' && ref( $walk->[0] ) eq 'ARRAY' ) {
             $walk = $walk->[0];
+            $walked++;
         }
+        is($walked, $steps,
+           "cloned chain kept its full depth down to the weakened level");
         ok(isweak($walk->[0]),
            "weakref preserved in iterative clone path");
         ok(defined $walk->[0],
            "weakref target alive via strong anchor");
         ok(!isweak($cloned->[1]),
            "strong anchor not over-weakened");
+        is(refaddr($walk->[0]), refaddr($cloned->[1]),
+           "weak ref and strong anchor point to the same cloned AV");
     }
 }
