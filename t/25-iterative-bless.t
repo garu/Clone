@@ -12,14 +12,14 @@ use strict;
 use warnings;
 use Test::More;
 use Clone qw(clone);
-use Scalar::Util qw(refaddr blessed);
+use Scalar::Util qw(refaddr blessed reftype);
 
 # Platform-adaptive depth (mirrors t/10-deep_recursion.t).
 # Must exceed MAX_DEPTH/2 to exercise the iterative path.
 my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $deep_target = $is_limited_stack ? 2500 : 5000;
 
-plan tests => 9;
+plan tests => 13;
 
 # Test 1-3: deeply nested blessed arrayrefs preserve class
 {
@@ -156,5 +156,56 @@ plan tests => 9;
 
         isnt(refaddr($clone_walk), refaddr($bottom),
              'bottom node is a different SV (not aliased)');
+    }
+}
+
+# Test 10-13: blessed *hash* chain at iterative depth.
+# Same contract as the blessed AV cases above, but each level is a blessed
+# hashref holding an RV to the next one, so the rebuild goes through
+# hv_clone_iterative.  t/28-limited-stack.t covers this far deeper, but only
+# on a threaded perl; this keeps the coverage unconditional.
+{
+    my $deep = bless { next => undef }, 'DeepHash';
+    my $curr = $deep;
+    for (2 .. $deep_target) {
+        my $next = bless { next => undef }, 'DeepHash';
+        $curr->{next} = $next;
+        $curr = $next;
+    }
+
+    my $cloned = eval {
+        local $SIG{__WARN__} = sub {};
+        clone($deep);
+    };
+
+    ok(!$@ && defined($cloned),
+       "clone of $deep_target-deep blessed hash chain does not die")
+        or diag("Error: " . ($@ || "undefined result"));
+
+    SKIP: {
+        skip 'clone failed', 3 unless defined $cloned;
+
+        is(blessed($cloned), 'DeepHash',
+           'top-level blessed hash preserves blessing');
+
+        # Walk the clone and the original in lockstep.  The loop must not
+        # short-circuit on blessedness: a chain that lost its class (or was
+        # truncated) part-way down would otherwise stop on the last still-good
+        # node and assert vacuously.  Count the levels actually traversed and
+        # require the full $mid.
+        my $mid  = int($deep_target / 2);
+        my $walk = $cloned;
+        my $reached = 0;
+        for (1 .. $mid) {
+            last unless ref($walk)
+                && reftype($walk) eq 'HASH'
+                && defined $walk->{next};
+            $walk = $walk->{next};
+            $reached++;
+        }
+        is($reached, $mid,
+           "cloned blessed hash chain is walkable $mid levels deep");
+        is(blessed($walk), 'DeepHash',
+           "intermediate blessed hash at depth $mid preserves blessing");
     }
 }
