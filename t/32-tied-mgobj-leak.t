@@ -127,8 +127,8 @@ package main;
     my @a = (1, 2, 3);
     my $c = clone(\$#a);
 
-    is($$c, 2, 'arylen: cloned $#a still reads the array last index');
+    is($$c, 2, 'arylen: cloned $#a reads the cloned array last index');
 
-    undef $c;
-    pass('arylen: cloned $#a freed without use-after-free');
+    @a = ();    # source array gone; clone must own its own AV
+    is($$c, 2, 'arylen: cloned mg_obj survives the source array');
 }
