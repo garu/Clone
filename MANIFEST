@@ -40,7 +40,7 @@ t/29-class-objects.t
 t/29-depth-zero-boundary.t
 t/30-edge-cases.t
 t/31-depth-parameter.t
-t/31-tied-mgobj-leak.t
+t/32-tied-mgobj-leak.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
