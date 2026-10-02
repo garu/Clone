@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 6;
+use Test::More tests => 7;
 use Clone qw(clone);
 
 # Partial clone graph must not leak when cloning croaks half-way.
@@ -85,7 +85,33 @@ tie my $boom, 'DieOnFetch';
        'shared object cloned once and freed during unwinding');
 }
 
-# 6: cloning still works after a croak (no corrupted internal state)
+# 6: the same holds past MAX_DEPTH, where the iterative cloner owns the
+#    graph instead.  Platform-adaptive depth: MAX_DEPTH is 2000 on
+#    Windows/Cygwin and 4000 elsewhere, and each array level costs ~2
+#    rdepth, so this spans both the recursive and the iterative path.
+{
+    my $is_limited = ($^O eq 'MSWin32' || $^O eq 'cygwin');
+    my $depth      = $is_limited ? 1200 : 2200;
+
+    my @keep;
+    my $deep = \$boom;
+    for my $i (1 .. $depth) {
+        my $tracker = Tracker->new($i);
+        push @keep, $tracker;		# keep the originals alive
+        $deep = [ $tracker, $deep ];
+    }
+
+    $Tracker::destroyed = 0;
+    eval {
+        local $SIG{__WARN__} = sub { };
+        clone($deep);
+    };
+
+    is($Tracker::destroyed, $depth,
+       "deep structure: all $depth cloned objects freed during unwinding");
+}
+
+# 7: cloning still works after a croak (no corrupted internal state)
 {
     my $ok = clone({ a => [1, 2, 3], b => \'x' });
     is_deeply($ok, { a => [1, 2, 3], b => \'x' },
