@@ -37,7 +37,9 @@ my $is_limited = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $max_depth  = $is_limited ? 2000 : 4000;
 my $depth      = $is_limited ? 1200 : 2200;
 
-plan tests => 19;
+my $have_b = eval { require B; 1 };
+
+plan tests => 20;
 
 eval q{
     use feature 'class';
@@ -247,4 +249,22 @@ sub clone_quietly {
     is(!$err && eval { $leaf->{obj}->x }, 11,
        'class instance reached through a deep hash is cloned intact')
         or diag("Error: " . ($err || $@));
+}
+
+# --- Test 20: the class stash reference taken per shell is released ---
+# clone_shell stamps the class by incrementing the stash's refcount
+# directly (sv_bless, which would balance it, rejects a class stash), so
+# a missed release would leak one reference per deep clone.
+SKIP: {
+    skip 'B not available', 1 unless $have_b;
+
+    my $stash = \%DeepPVOBJ::Point::;
+    my $orig  = nest(DeepPVOBJ::Point->new(x => 1), $depth, 0);
+
+    clone_quietly($orig) for 1 .. 5;        # warm up
+    my $before = B::svref_2object($stash)->REFCNT;
+    clone_quietly($orig) for 1 .. 20;
+    my $after = B::svref_2object($stash)->REFCNT;
+
+    is($after, $before, 'deep cloning does not leak class stash references');
 }
