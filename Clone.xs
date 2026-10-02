@@ -27,11 +27,17 @@
  *
  * MAX_DEPTH=2000 on Windows/Cygwin -> ~1000 nesting levels -> ~450 KB.
  * MAX_DEPTH=4000 elsewhere        -> ~2000 nesting levels -> ~900 KB.
- * (GH #77: 32000 was too aggressive — caused SEGV on CPAN smokers.) */
+ * (GH #77: 32000 was too aggressive — caused SEGV on CPAN smokers.)
+ *
+ * Overridable at build time, e.g. to force every clone through the
+ * iterative path:  perl Makefile.PL DEFINE=-DMAX_DEPTH=6
+ * The effective value is exposed to Perl as Clone::MAX_DEPTH(). */
+#ifndef MAX_DEPTH
 #if defined(_WIN32) || defined(__CYGWIN__)
 #define MAX_DEPTH 2000
 #else
 #define MAX_DEPTH 4000
+#endif
 #endif
 
 #define CLONE_STORE(x,y)						\
@@ -1030,6 +1036,14 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 MODULE = Clone		PACKAGE = Clone
 
 PROTOTYPES: ENABLE
+
+int
+MAX_DEPTH()
+	PROTOTYPE:
+	CODE:
+	RETVAL = MAX_DEPTH;
+	OUTPUT:
+	RETVAL
 
 void
 clone(self, depth=-1)
