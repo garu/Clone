@@ -77,7 +77,8 @@ static SV *sv_clone (SV *, HV *, int, int, AV *);
 static SV *clone_container_iterative(SV *, HV *, int, AV *);
 static SV *rv_clone_chain(SV *, HV *, int, AV *, clone_queue *);
 static SV *rv_clone_iterative(SV *, HV *, int, AV *);
-static int clone_magic(SV *, SV *, HV *, int, AV *);
+static SV *clone_elem(SV *, HV *, int, AV *, clone_queue *);
+static int clone_magic(SV *, SV *, HV *, int, AV *, clone_queue *);
 
 #ifdef DEBUG_CLONE
 /* __FUNCTION__ is supported by GCC, Clang and MSVC (all versions);
@@ -307,6 +308,25 @@ clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
         SV *src = q->items[i].src;
         SV *dst = q->items[i].dst;
 
+        /* Same ordering as sv_clone: magic first, and a container whose
+         * elements belong to its tie magic is not iterated at all -- the
+         * cloned tie owns the data.  Without this a deep tied container
+         * came out untied, and a tied AV was filled from av_fetch(), i.e.
+         * with the *source's* LV proxies, so writes to the clone went
+         * through to the original.
+         *
+         * threads::shared's tie is skipped by clone_magic (which returns
+         * 0 for it), so a shared container is still filled through its
+         * tie and comes out a plain unshared copy, as on the recursive
+         * path.
+         *
+         * Passing q down keeps this flat: a tie object holding the next
+         * tied container joins this very queue, so a chain of nested tied
+         * containers costs no C stack either. */
+        if (SvMAGICAL(src)
+            && clone_magic(src, dst, hseen, rdepth, weakrefs, q))
+            continue;
+
         if (SvTYPE(src) == SVt_PVHV)
             clone_fill_hv((HV *)src, (HV *)dst, hseen, rdepth, weakrefs, q);
         else
@@ -353,7 +373,6 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
     SV *current;
     SV *leaf_clone;
     SV *result;
-    SV **seen;
     I32 i;
 
     if (!ref || !SvROK(ref)) return NULL;
@@ -420,35 +439,13 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
         if (SvTYPE(current) == SVt_PVAV || SvTYPE(current) == SVt_PVHV) {
             leaf_clone = clone_shell(current, hseen, q);
         } else {
-            seen = CLONE_FETCH(current);
-            if (seen) {
-                leaf_clone = SvREFCNT_inc(*seen);
-            } else {
-                /* Mirror the non-cloneable cases from the regular sv_clone
-                 * switch (PVCV/PVGV/PVFM/PVIO/PVLV/REGEXP/BM): newSVsv()
-                 * croaks on these ("Bizarre copy of CODE in subroutine
-                 * entry") or stringifies them.  Share via SvREFCNT_inc
-                 * instead. */
-                switch (SvTYPE(current)) {
-#if PERL_VERSION <= 8
-                    case SVt_PVBM:	/* 8 */
-#elif PERL_VERSION >= 11
-                    case SVt_REGEXP:	/* 8 */
-#endif
-                    case SVt_PVLV:	/* 9 */
-                    case SVt_PVCV:	/* 12 */
-                    case SVt_PVGV:	/* 13 */
-                    case SVt_PVFM:	/* 14 */
-                    case SVt_PVIO:	/* 15 */
-                        leaf_clone = SvREFCNT_inc(current);
-                        break;
-                    default:
-                        leaf_clone = newSVsv(current);
-                        if ((SvREFCNT(current) > 1) || SvMAGICAL(current))
-                            CLONE_STORE(current, leaf_clone);
-                        break;
-                }
-            }
+            /* A non-RV, non-container leaf: hand it back to sv_clone.
+             * rdepth is above MAX_DEPTH, so sv_clone copies it without
+             * recursing into data, and the hseen lookup, COW sharing,
+             * magic cloning and the share-with-warning cases for types
+             * that cannot be copied at all (CV/GV/IO/FM/REGEXP) all live
+             * there in one place. */
+            leaf_clone = sv_clone(current, hseen, -1, rdepth, weakrefs);
         }
     }
 
@@ -510,9 +507,15 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 /* Clone all magic entries from ref onto clone.
  * Returns the number of tie-magic entries cloned; the caller uses this
  * to decide whether to skip direct HV/AV element iteration (tied
- * containers are managed entirely by their tie magic). */
+ * containers are managed entirely by their tie magic).
+ *
+ * q is the iterative cloner's work queue, or NULL on the recursive path.
+ * When set, an mg_obj pointing at a container joins that queue instead of
+ * being cloned through sv_clone: a chain of nested tied containers then
+ * costs a queue entry per level rather than a C stack frame per level. */
 static int
-clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
+clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs,
+            clone_queue *q)
 {
     MAGIC* mg;
     int has_qr = 0;
@@ -583,7 +586,8 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
 	          magic_ref++;
 	    /* fall through */
           default:
-            obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
+            obj = q ? clone_elem(mg->mg_obj, hseen, rdepth, weakrefs, q)
+                    : sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
             obj_cloned = 1;
         }
       } else {
@@ -724,13 +728,18 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
          * handling — see GH #107, #116, #119 for the iterative gap pattern.) */
         if (SvROK(ref))
             return rv_clone_iterative(ref, hseen, rdepth, weakrefs);
-        /* Simple scalars (non-reference, non-container) can always be
-         * safely copied without recursion.  newSVsv creates an independent
-         * copy, preventing aliasing of leaf values inside iteratively-cloned
-         * containers.  Without this, the iterative container cloner
-         * would share leaf SVs between original and clone — mutations
-         * through a reference to the clone's value would corrupt the
-         * original.  (GH #113) */
+        /* Simple scalars (non-reference, non-container) have no elements
+         * and no referent, so there is nothing left to recurse into: let
+         * the common path below handle them exactly as it does at any
+         * other depth.  It must not be short-circuited with a bare
+         * newSVsv() here — that is what used to lose COW sharing, scalar
+         * magic (tied scalars came out untied) and the threads::shared
+         * PVLV interception below.  (A copy rather than SvREFCNT_inc is
+         * what keeps iteratively-cloned containers from aliasing their
+         * leaves, GH #113; the common path still does that.)
+         *
+         * Magic cloning can recurse, but only back through the two
+         * iterative entry points above, so the C stack stays bounded. */
         switch (SvTYPE(ref)) {
             case SVt_NULL:
             case SVt_IV:
@@ -742,20 +751,22 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             case SVt_PVIV:
             case SVt_PVNV:
             case SVt_PVMG:
-                return newSVsv(ref);
-            default:
+            case SVt_PVLV:
                 break;
+            default:
+                /* Non-clonable types past MAX_DEPTH (e.g. PVGV, PVCV,
+                 * PVFM, PVIO): these cannot be deep-copied regardless of
+                 * depth; share with a warning.  The common path shares
+                 * them silently, so the warning has to be raised here. */
+                {
+                    SV *warn_sv = get_sv("Clone::WARN", 0);
+                    if (!warn_sv || SvTRUE(warn_sv))
+                        Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
+                                  "reference will be shared, not deep-copied",
+                                  MAX_DEPTH);
+                }
+                return SvREFCNT_inc(ref);
         }
-        /* Non-clonable types past MAX_DEPTH (e.g. PVGV, PVCV, PVFM, PVIO):
-         * these cannot be deep-copied regardless of depth; share with a
-         * warning. */
-        {
-            SV *warn_sv = get_sv("Clone::WARN", 0);
-            if (!warn_sv || SvTRUE(warn_sv))
-                Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
-                          "reference will be shared, not deep-copied", MAX_DEPTH);
-        }
-        return SvREFCNT_inc(ref);
     }
 
     clone = ref;
@@ -952,7 +963,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
     /* 1: TIED / MAGIC */
   if (SvMAGICAL(ref))
-      magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs);
+      magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs, NULL);
 
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
     /* For tied HV/AV (magic_ref > 0): skip direct element iteration;
