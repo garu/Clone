@@ -165,6 +165,15 @@ as a database handle.
 Code references (subroutines) are cloned by reference, not by value.
 The cloned coderef points to the same subroutine as the original.
 
+=item * Interpreter-Owned Magic
+
+A few magic types are bound to interpreter state that cannot be
+duplicated, so the clone receives a plain snapshot of the current value
+rather than live magic. This covers the regex match-offset variables
+C<@-> and C<@+> (and their elements), and C<$#array>: cloning
+C<\$#array> yields the index as an ordinary scalar, not a live view onto
+an array.
+
 =item * Thread Safety
 
 Clone is not explicitly thread-safe. Use appropriate synchronization

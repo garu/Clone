@@ -572,6 +572,21 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
           case '<': /* PERL_MAGIC_backref */
           case '@':  /* PERL_MAGIC_arylen_p */
             continue; /* resumes the outer magic iteration loop */
+          /* perl's sv_magic() refuses to take a reference on mg_obj for the
+           * types below, so a cloned mg_obj would be stored unreferenced and
+           * leak forever (the caller reference from sv_clone() can never be
+           * released -- dropping it would leave the magic dangling).  Worse,
+           * regdata/regdatum do not even store an SV there: @-/@+ keep the
+           * literal character '-' or '+' in the mg_obj slot, so sv_clone()
+           * dereferences 0x2d/0x2b and segfaults.  Skip the magic instead:
+           * av_len()/av_fetch() read @-/@+ through their get vtable anyway,
+           * and a cloned $#a is better off as a plain index snapshot than as
+           * live arylen magic over a detached array copy. */
+          case '#': /* PERL_MAGIC_arylen   -- mg_obj is the parent AV */
+          case 'D': /* PERL_MAGIC_regdata  -- mg_obj is a char, not an SV */
+          case 'd': /* PERL_MAGIC_regdatum -- mg_obj is a char, not an SV */
+          case ':': /* PERL_MAGIC_symtab   -- mg_obj is a stash */
+            continue;
           case 'P': /* PERL_MAGIC_tied */
           case 'p': /* PERL_MAGIC_tiedelem */
           case 'q': /* PERL_MAGIC_tiedscalar */
@@ -624,10 +639,11 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
          * leaks one refcount per clone (DESTROY never fires on the
          * cloned tie object).
          * But it stores mg_obj *unreferenced* in several cases: a
-         * self-referential obj, arylen ('#') / regdata ('D') /
-         * regdatum ('d') / symtab (':') magic, and glob-slot
-         * back-pointers.  That list has changed across perl releases,
-         * so instead of mirroring it here, observe whether the refcount
+         * self-referential obj and glob-slot back-pointers.  (The other
+         * unreferenced types -- arylen, regdata, regdatum, symtab -- are
+         * skipped outright above, since cloning their mg_obj can only
+         * leak it.)  That list has changed across perl releases, so
+         * instead of mirroring it here, observe whether the refcount
          * actually went up.  Decrementing when perl took no reference
          * would free an SV the magic still points at. */
         if (obj_cloned && SvREFCNT(obj) > obj_rc)
@@ -790,20 +806,26 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
       return SvREFCNT_inc(*seen);
     }
 
-  /* threads::shared tiedelem PVLVs are proxies to shared data.
+  /* Some magical PVLVs are proxies onto state the clone must not share.
    * They would normally be returned by SvREFCNT_inc (like other PVLVs),
-   * but that shares the proxy — mutations go back to the shared var.
-   * Copy through magic to get a plain unshared value. (GH #18) */
+   * which aliases the proxy instead of copying it:
+   *   - threads::shared tiedelem proxies: mutations go back to the shared
+   *     variable. (GH #18)
+   *   - regdatum ('d') elements of @-/@+: they read the *current* match
+   *     through the regex engine, so an aliased clone silently changes
+   *     value on the next successful match anywhere in the program.
+   * Copy through magic to get a plain, detached value. */
   if (SvTYPE(ref) == SVt_PVLV && SvMAGICAL(ref))
   {
     MAGIC *mg;
     for (mg = SvMAGIC(ref); mg; mg = mg->mg_moremagic)
     {
-      if ((mg->mg_type == PERL_MAGIC_tiedelem
-           || mg->mg_type == PERL_MAGIC_tiedscalar)
-          && is_threads_shared_tie(mg->mg_obj))
+      if (mg->mg_type == 'd' /* PERL_MAGIC_regdatum */
+          || ((mg->mg_type == PERL_MAGIC_tiedelem
+               || mg->mg_type == PERL_MAGIC_tiedscalar)
+              && is_threads_shared_tie(mg->mg_obj)))
       {
-        TRACEME(("threads::shared tiedelem PVLV — copy value\n"));
+        TRACEME(("magical PVLV proxy — copy value\n"));
         clone = newSVsv(ref);
         if (visible && ref != clone)
           CLONE_STORE(ref, clone);
