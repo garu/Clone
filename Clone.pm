@@ -69,6 +69,55 @@ arrays or hashes, pass them in by reference, e.g.
 
     my %copy = %{ clone (\%hash) };
 
+=head2 Limiting the clone depth
+
+C<clone()> takes an optional second argument that B<limits> how deep the
+copy goes. It does not raise any limit -- see L</LIMITATIONS> for the
+recursion limit, which is a separate, compile-time constant.
+
+    my $copy = clone($data, $depth);
+
+=over 4
+
+=item * C<$depth> omitted or negative (the default is C<-1>)
+
+Unlimited: the whole structure is deep-copied.
+
+=item * C<$depth = 0>
+
+No copy at all. C<clone()> returns the argument itself (its reference
+count incremented), so the "clone" and the original are the same thing.
+
+=item * C<$depth = N> (positive)
+
+Copy C<N> levels of containers, then B<share> whatever is below. Each
+hash or array traversed consumes one unit; dereferencing a reference
+does not.
+
+=back
+
+Sharing is the part worth being careful about: beyond the limit, the
+"clone" holds the original's own SVs, so writes through either one are
+visible in the other.
+
+    my $inner = { v => 1 };
+    my $outer = { child => $inner };
+
+    my $copy = clone($outer, 1);     # one level: $outer only
+
+    $copy->{child}{v} = 99;
+    print $inner->{v};               # '99' -- same hash, not a copy
+
+So a depth-limited clone is a partial copy with shared innards, not a
+shallower independent structure. Use it only when you know the shared
+part is read-only or does not outlive the copy; otherwise omit the
+argument.
+
+B<Caveat:> if the structure is deep enough for C<clone()> to fall back
+to its iterative path (see L</LIMITATIONS>), the depth limit is silently
+dropped from that point down and the rest is deep-copied in full
+(L<GH #154|https://github.com/garu/Clone/issues/154>).
+
 =head1 EXAMPLES
 
 =head2 Cloning Blessed Objects
@@ -147,10 +196,9 @@ To silence it:
 
     $Clone::WARN = 0;
 
-You can override the depth limit by passing it as the second argument
-to C<clone()>:
-
-    my $copy = clone($data, 8000);  # allow deeper recursion
+The recursion limit is a compile-time constant; it cannot be raised at
+runtime. The second argument to C<clone()> is unrelated to it -- see
+L</"Limiting the clone depth"> below.
 
 =item * Filehandles and IO Objects
 
