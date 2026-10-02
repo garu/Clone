@@ -32,7 +32,7 @@ BEGIN {
         or plan skip_all => 'threads not loadable';
 }
 
-plan tests => 9;
+plan tests => 11;
 
 use Clone qw(clone);
 
@@ -204,4 +204,56 @@ sub in_thread {
     is($measured, $DEPTH,
        "$DEPTH-deep blessed hash chain clones to full depth");
     is($blessed_ok, 1, 'blessings survive the deep hash clone');
+}
+
+# --- Deep chain of tied hashes --------------------------------------
+# Each level's nested hash lives inside its tie object, so cloning the
+# tie magic (clone_magic) is the only way to reach the next level.  If
+# the iterative drain cloned mg_obj through sv_clone instead of handing
+# it to its own work queue, this cost one nested drain -- several C stack
+# frames -- per level, and blew this stack long before the last level.
+#
+# Shallower than $DEPTH: perl itself needs a frame per level to build and
+# free a chain of tied hashes this deep, which would mask the regression
+# under test.
+{
+    my $TIED_DEPTH = 10_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my %h;
+            tie %h, 'Deep::Tie';
+            $h{next} = $prev;
+            push @keep, \%h;       # keep every level alive
+            $prev = \%h;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $tied_ok  = defined tied(%$cloned) ? 1 : 0;
+        my $walk     = $cloned;
+        while (ref($walk) && ref($walk->{next})) {
+            $walk = $walk->{next};
+            $measured++;
+            $tied_ok = 0 unless defined tied(%$walk);
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep tied hash chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the deep tied chain is still tied');
+}
+
+{
+    package Deep::Tie;
+    sub TIEHASH  { bless {}, shift }
+    sub FETCH    { $_[0]->{ $_[1] } }
+    sub STORE    { $_[0]->{ $_[1] } = $_[2] }
+    sub FIRSTKEY { my $s = shift; scalar keys %$s; each %$s }
+    sub NEXTKEY  { each %{ $_[0] } }
 }

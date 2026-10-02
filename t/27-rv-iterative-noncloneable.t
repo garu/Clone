@@ -15,7 +15,12 @@ my $is_limited_stack = ($^O eq 'MSWin32' || $^O eq 'cygwin');
 my $max_depth_val    = $is_limited_stack ? 2000 : 4000;
 my $chain_len        = $max_depth_val + 1000;
 
-plan tests => 4;
+plan tests => 6;
+
+# Sharing a non-cloneable leaf past MAX_DEPTH warns (same message the
+# container path has always emitted); collected here so the warnings do
+# not leak into the harness output, and asserted at the end.
+my @warnings;
 
 # Build a linear chain of $chain_len RVs ending at $leaf, returning the
 # top-of-chain RV plus a keepalive for the slot array.
@@ -37,7 +42,8 @@ sub build_chain {
     my ($r, $keep) = build_chain($cv);
 
     my $c = eval {
-        local $SIG{ALRM} = sub { die "timeout\n" };
+        local $SIG{ALRM}     = sub { die "timeout\n" };
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
         alarm(15);
         my $x = clone($r);
         alarm(0);
@@ -56,7 +62,8 @@ sub build_chain {
     my ($r, $keep) = build_chain($gv);
 
     my $ok = eval {
-        local $SIG{ALRM} = sub { die "timeout\n" };
+        local $SIG{ALRM}     = sub { die "timeout\n" };
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
         alarm(15);
         my $c = clone($r);
         alarm(0);
@@ -75,7 +82,8 @@ sub build_chain {
     my ($r, $keep) = build_chain(\$io);
 
     my $ok = eval {
-        local $SIG{ALRM} = sub { die "timeout\n" };
+        local $SIG{ALRM}     = sub { die "timeout\n" };
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
         alarm(15);
         my $c = clone($r);
         alarm(0);
@@ -87,3 +95,11 @@ sub build_chain {
     ok($ok, "RV chain with IO-handle leaf clones without croaking")
         or diag("Error: $@");
 }
+
+# Tests 5+6: the leaves above are shared, and sharing is announced.
+ok( scalar(@warnings) >= 3,
+    "each non-cloneable leaf past MAX_DEPTH warns that it is shared" )
+    or diag( "Warnings: " . scalar(@warnings) );
+is( scalar( grep { !/depth limit/ } @warnings ), 0,
+    "no warnings other than the depth-limit one" )
+    or diag("Warnings: @warnings");
