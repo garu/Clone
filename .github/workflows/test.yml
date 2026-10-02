@@ -67,6 +67,50 @@ jobs:
       - run: make test
 
 ###
+### Force every clone through the iterative (past-MAX_DEPTH) path
+###
+### MAX_DEPTH is #ifndef-guarded in Clone.xs, so lowering it here makes
+### even shallow structures take the heap work-queue code path that
+### normally only runs on pathologically deep data.  The whole suite then
+### acts as a regression net for it.
+###
+### 6 is the lowest value the suite currently passes at; below that the
+### explicit depth= argument is lost once a clone crosses into the
+### iterative path.  Lower this as that gap gets closed.
+###
+
+  iterative-path:
+    runs-on: ubuntu-latest
+    needs: [ubuntu-latest]
+    name: "iterative path (MAX_DEPTH=6)"
+
+    env:
+      PERL_USE_UNSAFE_INC: 0
+      AUTHOR_TESTING: 1
+      AUTOMATED_TESTING: 1
+      RELEASE_TESTING: 1
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: perl -V
+      - name: Install libgmp-dev for Math::BigInt::GMP
+        run: sudo apt-get update && sudo apt-get install -y libgmp-dev
+      - name: install deps using cpm
+        uses: perl-actions/install-with-cpm@v2
+        with:
+          sudo: false
+          global: false
+          cpanfile: ".github/cpanfile.test"
+          args: "--with-all"
+      - name: Set PERL5LIB to local lib
+        run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
+      - run: perl Makefile.PL DEFINE=-DMAX_DEPTH=6
+      - run: make
+      - name: Confirm the override took effect
+        run: perl -Mblib -MClone -e 'die "MAX_DEPTH is @{[Clone::MAX_DEPTH()]}, expected 6" unless Clone::MAX_DEPTH() == 6'
+      - run: make test
+
+###
 ### linux testing multiple Perl versions
 ###
 
