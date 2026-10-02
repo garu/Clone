@@ -1141,5 +1141,10 @@ clone(self, depth=-1)
 	 * `clone` keeps the reference sv_clone() returned, and the rest
 	 * of the graph hangs off it. */
 	LEAVE;
+	/* Cloning can run perl code (a tied FETCH, a DESTROY), and that
+	 * may have reallocated the argument stack, leaving the SP cached
+	 * on entry pointing into freed memory.  ax is an index, so it
+	 * still locates the mark SP has to be restored to. */
+	SP = PL_stack_base + ax - 1;
 	EXTEND(SP,1);
 	PUSHs(sv_2mortal(clone));
