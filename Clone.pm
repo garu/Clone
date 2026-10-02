@@ -152,6 +152,16 @@ to C<clone()>:
 
     my $copy = clone($data, 8000);  # allow deeper recursion
 
+The compiled-in limit is readable from Perl:
+
+    Clone::MAX_DEPTH();   # 4000, 2000, or whatever was built in
+
+It can be changed at build time, which is mostly useful for testing —
+lowering it forces even shallow structures through the iterative
+fallback:
+
+    perl Makefile.PL DEFINE=-DMAX_DEPTH=6
+
 =item * Filehandles and IO Objects
 
 Filehandles and IO objects are not deep-copied. The clone shares the
