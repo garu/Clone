@@ -9,7 +9,7 @@ our @ISA       = qw(Exporter);
 our @EXPORT;
 our @EXPORT_OK = qw( clone );
 
-our $VERSION = '0.50_01';
+our $VERSION = '0.51';
 our $WARN    = 1;
 
 XSLoader::load('Clone', $VERSION);
