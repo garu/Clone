@@ -15,9 +15,10 @@ use warnings;
 use Test::More;
 use Clone 'clone';
 
-# MAX_DEPTH in Clone.xs: 2000 on Windows/Cygwin, 4000 elsewhere.
-my $max_depth = ($^O eq 'MSWin32' || $^O =~ /cygwin/i) ? 2000 : 4000;
-my $boundary  = $max_depth / 2;
+# Ask the XS side for the compiled-in limit rather than hardcoding it:
+# it is platform-dependent and overridable with -DMAX_DEPTH at build time.
+my $max_depth = Clone::MAX_DEPTH();
+my $boundary  = int($max_depth / 2);
 
 # The exact boundary is what regressed; the two levels below it share the
 # same contract and guard against an off-by-one in either direction.

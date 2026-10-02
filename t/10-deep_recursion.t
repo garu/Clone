@@ -215,7 +215,7 @@ my $moderate_target  = 1000;
 # the MAX_DEPTH guard.  We must build a true chain via an array of refs, not
 # "$ref = \$ref" which creates a cycle (back to the same SV).
 {
-    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $max_depth_val = Clone::MAX_DEPTH();
     my $ref_depth     = $max_depth_val + 500;
 
     # Chain: $chain[0] = \$leaf_val,  $chain[i] = \$chain[i-1]
@@ -284,7 +284,7 @@ my $moderate_target  = 1000;
 # RV-to-AV and RV-to-HV created wrapper RVs without checking SvWEAKREF,
 # silently converting weak references into strong ones.
 {
-    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $max_depth_val = Clone::MAX_DEPTH();
 
     # Build a deeply nested AV that exceeds MAX_DEPTH/2 nesting levels.
     # Then create a structure where a weak ref points to an inner node.
@@ -350,7 +350,7 @@ my $moderate_target  = 1000;
 # warns once per such leaf.  Test 27 is the positive control proving that
 # signal is live, which is what gives the silence in tests 24/26 meaning.
 {
-    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $max_depth_val = Clone::MAX_DEPTH();
     my $width = $max_depth_val * 3;  # far more elements than MAX_DEPTH
 
     # Test 24: a flat array of non-cloneable leaves must stay on the
@@ -411,7 +411,7 @@ my $moderate_target  = 1000;
 # Before rv_clone_iterative consolidation, only AV weakrefs were tested;
 # HV weakrefs follow the same code path but deserve explicit coverage.
 {
-    my $max_depth_val = $is_limited_stack ? 2000 : 4000;
+    my $max_depth_val = Clone::MAX_DEPTH();
     my $target_depth = int($max_depth_val / 2) + 200;
 
     # Build deeply nested hash chain
