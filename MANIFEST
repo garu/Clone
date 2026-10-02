@@ -43,6 +43,7 @@ t/31-depth-parameter.t
 t/32-tied-mgobj-leak.t
 t/33-perl58-syntax.t
 t/34-element-store-parity.t
+t/35-deep-pvobj.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
