@@ -67,14 +67,19 @@ use Clone qw(clone);
 #
 # On perl 5.10.0 this file passes subtest 1 (a clone in the main thread)
 # and then takes SIGSEGV the moment a subtest calls threads->create with a
-# closure capturing a blessed reference. Clone is not a participant in that
-# crash: it installs no CLONE handler, no MY_CXT per-interpreter state and
-# no magic of its own, so perl_clone() -- which is what runs at thread
-# creation -- never executes a line of Clone.xs. 5.10.0's ithreads were
-# notoriously unstable and 5.10.1 shipped a large batch of thread fixes;
-# among core releases only 5.10.0 is affected (5.8.9 and 5.10.1+ run these
-# subtests clean), which is why the gate is pinned to that one version
-# rather than to "$] < 5.010001".
+# closure capturing a blessed reference. The cause is NOT confirmed: the
+# crash has not been reproduced on a threaded 5.10.0, with or without
+# Clone. It is suspected to be a 5.10.0 ithreads bug (5.10.1 shipped a
+# large batch of thread fixes, and Clone.xs has no CLONE handler, no
+# MY_CXT state and no magic of its own, so perl_clone() runs none of its
+# code). But subtest 1 has just run Clone, and a malformed SV left behind
+# by it could also make perl_clone() crash, so a Clone bug is not ruled
+# out. Among core releases only 5.10.0 fails here (5.8.9 and 5.10.1+ run
+# these subtests clean), which is why the gate is pinned to that one
+# version rather than to "$] < 5.010001".
+#
+# This gate is a stopgap, not a verdict: remove it once GH #161 is
+# reproduced and the crash is shown to happen without Clone loaded.
 #
 # Subtest 1 is deliberately left running: it is the only pure-Clone path
 # here and it is exactly the coverage that still holds on 5.10.0.
@@ -85,7 +90,7 @@ use constant ITHREADS_UNSAFE => (
     $] >= 5.010000 && $] < 5.010001 && !$ENV{CLONE_FORCE_ITHREADS_TESTS}
 );
 use constant ITHREADS_SKIP_REASON =>
-    'perl 5.10.0 ithreads SEGV on thread creation (GH #161) -- '
+    'perl 5.10.0: unexplained SEGV on thread creation (GH #161) -- '
     . 'set CLONE_FORCE_ITHREADS_TESTS=1 to run anyway';
 
 # --- Helper: run a closure in a child thread with error capture ---
