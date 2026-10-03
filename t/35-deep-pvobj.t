@@ -39,7 +39,7 @@ my $depth      = $is_limited ? 1200 : 2200;
 
 my $have_b = eval { require B; 1 };
 
-plan tests => 20;
+plan tests => 21;
 
 eval q{
     use feature 'class';
@@ -148,9 +148,15 @@ sub clone_quietly {
             push @bad, "$label: class is " . (ref($copy_leaf) || 'not an object')
                 unless ref($copy_leaf) eq 'DeepPVOBJ::Point';
             push @bad, "$label: aliased the original"
-                if refaddr($copy_leaf) == refaddr($orig_leaf);
-            push @bad, "$label: x is " . ($copy_leaf->x // 'undef')
-                unless eval { $copy_leaf->x } == 7;
+                if ref($copy_leaf)
+                && refaddr($copy_leaf) == refaddr($orig_leaf);
+
+            # Both bugs this file guards against leave $copy_leaf as
+            # something ->x cannot be called on, so take the value once
+            # inside an eval and report it rather than dying here.
+            my $got = eval { $copy_leaf->x };
+            push @bad, "$label: x is " . (defined $got ? $got : "<died: $@>")
+                unless defined $got && $got == 7;
         }
     }
 
@@ -267,4 +273,35 @@ SKIP: {
     my $after = B::svref_2object($stash)->REFCNT;
 
     is($after, $before, 'deep cloning does not leak class stash references');
+}
+
+# --- Test 21: the same, across the MAX_DEPTH boundary shapes ----------
+# At levels == MAX_DEPTH/2 the RV above the instance is still cloned
+# recursively, so the shell is blessed by clone_shell (+1 stash) and then
+# re-blessed by sv_clone's RV branch (dec, inc).  That is the one place
+# two blessing policies touch the same SV, so sweep the boundary grid.
+SKIP: {
+    skip 'B not available', 1 unless $have_b;
+
+    my $stash = \%DeepPVOBJ::Point::;
+    my @leaky;
+
+    for my $extra (0 .. 3) {
+        for my $off (-1, 0, 1) {
+            my $levels = ($max_depth / 2) + $off;
+            my $orig   = nest(DeepPVOBJ::Point->new(x => 3), $levels, $extra);
+
+            clone_quietly($orig) for 1 .. 5;    # warm up
+            my $before = B::svref_2object($stash)->REFCNT;
+            clone_quietly($orig) for 1 .. 20;
+            my $after = B::svref_2object($stash)->REFCNT;
+
+            push @leaky, "levels=$levels extra=$extra: $before -> $after"
+                unless $after == $before;
+        }
+    }
+
+    is_deeply(\@leaky, [],
+              'no stash leak across the MAX_DEPTH boundary shapes')
+        or diag(join "\n", @leaky);
 }
