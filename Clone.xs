@@ -559,6 +559,35 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
           || mg->mg_type == PERL_MAGIC_shared)
         continue;
 
+      /* PERL_MAGIC_utf8 keeps two unrelated things: mg_len caches the
+       * string's character length (>= 0, or -1 for "not known yet") and
+       * mg_ptr is a fixed-size byte<->char offset cache of
+       * PERL_MAGIC_UTF8_CACHESIZE * 2 STRLENs, or NULL.  mg_len is *not*
+       * the length of mg_ptr, so neither may be handed to sv_magic() as
+       * name/namlen: with a cached length its savepvn() reads mg_len
+       * bytes out of a 32-byte buffer, copying adjacent heap into the
+       * clone (and segfaulting on a large enough string).  Attach the
+       * magic with no name and install both fields by hand.
+       *
+       * obj is passed as NULL on purpose: perl only ever creates 'w'
+       * magic with obj == 0 (S_utf8_mg_pos_cache_update), and forwarding
+       * mg_obj here would make the clone hold a counted reference to the
+       * *source's* SV instead of a cloned one. */
+      if (mg->mg_type == PERL_MAGIC_utf8)
+      {
+        MAGIC *new_mg = sv_magicext(clone, NULL, mg->mg_type,
+                                    mg->mg_virtual, NULL, 0);
+        if (mg->mg_ptr)
+        {
+          STRLEN *cache;
+          Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+          Copy(mg->mg_ptr, cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
+          new_mg->mg_ptr = (char *) cache;
+        }
+        new_mg->mg_len = mg->mg_len;
+        continue;
+      }
+
       /* Some mg_obj's can be null, don't bother cloning */
       if ( mg->mg_obj != NULL )
       {
@@ -601,13 +630,6 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
            * mg_ptr through.  (fixes 20-year-old memory leak) */
         } else if (mg->mg_len == HEf_SVKEY) {
           /* mg_ptr is an SV*; sv_magic() below will SvREFCNT_inc it */
-        } else if (mg->mg_len == -1 && mg->mg_type == PERL_MAGIC_utf8) { /* copy the cache */
-          if (mg->mg_ptr) {
-            STRLEN *cache;
-            Newxz(cache, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
-            mg_ptr = (char *) cache;
-            Copy(mg->mg_ptr, mg_ptr, PERL_MAGIC_UTF8_CACHESIZE * 2, STRLEN);
-          }
         } else if ( mg->mg_ptr != NULL) {
           croak("Unsupported magic_ptr clone");
         }
