@@ -26,7 +26,7 @@ jobs:
       RELEASE_TESTING: 1
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: perl -V
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: sudo apt-get update && sudo apt-get install -y libgmp-dev
@@ -52,7 +52,7 @@ jobs:
     needs: [ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: perl -V
       - name: install deps using cpm
         uses: perl-actions/install-with-cpm@v2
@@ -104,7 +104,7 @@ jobs:
       perl-versions: ${{ steps.action.outputs.perl-versions }}
     steps:
       - id: action
-        uses: perl-actions/perl-versions@v1
+        uses: perl-actions/perl-versions@v2
         with:
           since-perl: v5.8
           with-devel: true
@@ -126,7 +126,7 @@ jobs:
       image: perldocker/perl-tester:${{ matrix.perl-version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: perl -V
       - name: Install libgmp-dev for Math::BigInt::GMP
         run: apt-get update && apt-get install -y libgmp-dev
@@ -159,7 +159,7 @@ jobs:
 
     container: ${{ matrix.os-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install dependencies
         run: |
           (apt-get update &&
@@ -194,7 +194,7 @@ jobs:
       RELEASE_TESTING: 1
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: perl -V
       - name: install deps using cpm
         uses: perl-actions/install-with-cpm@v2
@@ -223,7 +223,7 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global core.eol lf
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Perl
         run: |
           choco install strawberryperl
