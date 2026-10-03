@@ -67,6 +67,33 @@ jobs:
       - run: make test
 
 ###
+### Static check that shipped files still parse on perl 5.8 (GH #162)
+###
+### Runs on its own because it needs PPI, and PPI requires Clone at runtime:
+### installing it alongside the dist under test would be a circular install.
+### t/33 never loads Clone, so here there is nothing to shadow -- no
+### Makefile.PL, no build, just the token scan.
+###
+
+  perl58-syntax:
+    runs-on: ubuntu-latest
+    name: "perl 5.8 syntax guard"
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: install PPI
+        uses: perl-actions/install-with-cpm@v2
+        with:
+          sudo: false
+          global: false
+          install: "PPI"
+      - name: Set PERL5LIB to local lib
+        run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
+      - name: fail if PPI is missing, so the check cannot silently skip
+        run: perl -MPPI -e 'print "PPI $PPI::VERSION\n"'
+      - run: prove -v t/33-perl58-syntax.t
+
+###
 ### linux testing multiple Perl versions
 ###
 
