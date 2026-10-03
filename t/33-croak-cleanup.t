@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 7;
+use Test::More tests => 8;
 use Clone qw(clone);
 
 # Partial clone graph must not leak when cloning croaks half-way.
@@ -116,4 +116,32 @@ tie my $boom, 'DieOnFetch';
     my $ok = clone({ a => [1, 2, 3], b => \'x' });
     is_deeply($ok, { a => [1, 2, 3], b => \'x' },
               'clone() still correct after a croak');
+}
+
+# 8: the field array of a 5.38+ class instance is owned by the clone
+#    while it is being filled, so fields cloned before the croak are
+#    freed too.  The field order matters: the Tracker is cloned first,
+#    the tied scalar reference second.
+SKIP: {
+    skip 'class feature requires perl 5.38', 1 if $] < 5.038;
+
+    my $built = eval <<'CLASS';
+use feature 'class';
+no warnings 'experimental::class';
+class CroakFields {
+    field $kept :param;
+    field $boom :param;
+}
+1;
+CLASS
+    skip "class syntax unavailable: $@", 1 unless $built;
+
+    my $obj = CroakFields->new(kept => Tracker->new('field'),
+                               boom => \$boom);
+
+    $Tracker::destroyed = 0;
+    eval { clone($obj) };
+
+    is($Tracker::destroyed, 1,
+       'class instance: cloned field freed during unwinding');
 }

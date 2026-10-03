@@ -44,6 +44,7 @@ t/32-tied-mgobj-leak.t
 t/33-croak-cleanup.t
 t/33-perl58-syntax.t
 t/34-element-store-parity.t
+t/34-stack-realloc.t
 t/dclone.t
 t/dump.pl
 t/tied.pl

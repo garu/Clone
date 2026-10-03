@@ -137,7 +137,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
  * ------------------------------------------------------------------- */
 
 /* Registered with SAVEDESTRUCTOR_X so the queue is released both on the
- * normal path (when the XSUB's scope exits) and when cloning croaks — a
+ * normal path (at LEAVE) and when cloning croaks — a
  * dying __WARN__ handler on the depth-limit warning, or a tied FETCH,
  * longjmps straight past any explicit Safefree.  The queue itself lives
  * on the heap because the savestack is unwound after our C frame is
@@ -361,6 +361,7 @@ clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     if (!ref) return NULL;
 
     Newxz(q, 1, clone_queue);
+    ENTER;
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
     root_clone = clone_shell(ref, hseen, q);
@@ -368,15 +369,18 @@ clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
      * the reason spelled out in sv_clone(): a croak while draining
      * discards this frame's reference, and hseen releasing its own would
      * still leave the root -- and the whole sub-graph below it -- alive
-     * and unreachable.  The caller gets a fresh reference below.
+     * and unreachable.
      *
-     * This is also why the queue is no longer freed by an ENTER/LEAVE
-     * pair of its own: the root has to be registered in a scope that
-     * outlives this function, and the queue may as well share it. */
+     * The caller's reference is taken *before* LEAVE, so the local scope
+     * can stay: on the normal path LEAVE drops only the savestack's
+     * reference (and frees the queue, as before), while a croak during
+     * the drain unwinds this very scope and frees the root. */
     SAVEFREESV(root_clone);
     clone_drain(q, hseen, rdepth, weakrefs);
 
-    return SvREFCNT_inc_simple_NN(root_clone);
+    SvREFCNT_inc_simple_NN(root_clone);
+    LEAVE;
+    return root_clone;
 }
 
 /* Iterative clone for deeply nested scalar-ref chains past MAX_DEPTH.
@@ -542,6 +546,7 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     SV *result;
 
     Newxz(q, 1, clone_queue);
+    ENTER;
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
     result = rv_clone_chain(ref, hseen, rdepth, weakrefs, q);
@@ -550,7 +555,9 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
         SAVEFREESV(result);
     clone_drain(q, hseen, rdepth, weakrefs);
 
-    return SvREFCNT_inc(result);
+    SvREFCNT_inc(result);
+    LEAVE;
+    return result;
 }
 
 /* Clone all magic entries from ref onto clone.
@@ -996,9 +1003,14 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
    * sub-graph is built, and the caller gets a fresh reference at the
    * bottom of this function -- a reference that a longjmp from in
    * between never creates, leaving the savestack as the sole owner, to
-   * free during unwinding.  On the normal path the savestack's own
-   * reference is released when the XSUB's scope exits, by which point
-   * the parent container owns the clone exactly as before. */
+   * free during unwinding.
+   *
+   * The registration gets a scope of its own so the savestack cost stays
+   * O(nesting depth) rather than O(graph size): this frame's entry is
+   * released at LEAVE, as soon as its sub-graph is complete and the
+   * caller's reference (taken just before) exists.  A croak anywhere in
+   * between unwinds this scope along with every enclosing one. */
+  ENTER;
   SAVEFREESV(clone);
 
     /* 1: TIED / MAGIC */
@@ -1094,8 +1106,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 
   TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
   /* The savestack owns the reference this frame created; hand the caller
-   * one of its own.  Reaching here means nothing croaked. */
-  return SvREFCNT_inc_simple_NN(clone);
+   * one of its own, then close the scope that held ours.  Reaching here
+   * means nothing croaked, and the caller stores the clone into its
+   * parent container without running any perl code in between. */
+  SvREFCNT_inc_simple_NN(clone);
+  LEAVE;
+  return clone;
 }
 
 MODULE = Clone		PACKAGE = Clone
@@ -1142,9 +1158,9 @@ clone(self, depth=-1)
 	        }
 	    }
 	}
-	/* Frees hseen, weakrefs and the in-flight clone references.
-	 * `clone` keeps the reference sv_clone() returned, and the rest
-	 * of the graph hangs off it. */
+	/* Frees hseen and weakrefs (and, on a croak, whatever clone
+	 * references were still in flight).  `clone` keeps the reference
+	 * sv_clone() returned, and the rest of the graph hangs off it. */
 	LEAVE;
 	/* Cloning can run perl code (a tied FETCH, a DESTROY), and that
 	 * may have reallocated the argument stack, leaving the SP cached
