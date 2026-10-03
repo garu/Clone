@@ -1,6 +1,8 @@
 Revision history for Perl module Clone
 
 0.52 (unreleased)
+  - fix: clone Perl 5.38+ class instances (SVt_PVOBJ) past MAX_DEPTH
+    instead of croaking or aliasing the original
   - tests: skip t/16-threads-shared.t when threads::shared predates
     shared_clone() (1.21), fixing a hard failure on perl 5.10.0 (GH #161)
   - tests: skip t/17-threads-classdbi.t's thread subtests on perl 5.10.0,

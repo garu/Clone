@@ -52,10 +52,26 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
+/* SVt_PVOBJ (class instances, Perl 5.38+) is an enum value, not a
+ * #define, so it cannot be tested with #ifdef and cannot appear in a
+ * case label on older perls.  These predicates keep the version test in
+ * one place for the if-chains that drive the iterative path. */
+#if PERL_VERSION >= 38
+#  define CLONE_IS_PVOBJ(sv) (SvTYPE(sv) == SVt_PVOBJ)
+#else
+#  define CLONE_IS_PVOBJ(sv) 0
+#endif
+
+/* The SV types the iterative path clones through its work queue rather
+ * than by copying: anything whose contents can nest arbitrarily deep. */
+#define CLONE_IS_DEEP_CONTAINER(sv)					\
+    (SvTYPE(sv) == SVt_PVAV || SvTYPE(sv) == SVt_PVHV			\
+     || CLONE_IS_PVOBJ(sv))
+
 /* Work item for the iterative (past-MAX_DEPTH) cloner: a source
  * container paired with its already-allocated clone shell. */
 typedef struct {
-    SV *src;	/* source AV or HV                                */
+    SV *src;	/* source AV, HV or PVOBJ                         */
     SV *dst;	/* its clone, already registered in hseen, empty  */
 } clone_task;
 
@@ -190,10 +206,10 @@ clone_queue_push(clone_queue *q, SV *src, SV *dst)
     q->len++;
 }
 
-/* Return the clone of a container (AV or HV), creating an empty shell and
- * queueing it for filling the first time we see it.  Registering the shell
- * in hseen before it is filled is what makes circular references safe.
- * The returned SV carries one reference for the caller. */
+/* Return the clone of a container (AV, HV or PVOBJ), creating an empty
+ * shell and queueing it for filling the first time we see it.  Registering
+ * the shell in hseen before it is filled is what makes circular references
+ * safe.  The returned SV carries one reference for the caller. */
 static SV *
 clone_shell(SV *ref, HV *hseen, clone_queue *q)
 {
@@ -203,7 +219,27 @@ clone_shell(SV *ref, HV *hseen, clone_queue *q)
     if ((seen = CLONE_FETCH(ref)))
         return SvREFCNT_inc(*seen);
 
-    clone = (SvTYPE(ref) == SVt_PVHV) ? (SV *) newHV() : (SV *) newAV();
+    if (SvTYPE(ref) == SVt_PVHV)
+        clone = (SV *) newHV();
+#if PERL_VERSION >= 38
+    else if (SvTYPE(ref) == SVt_PVOBJ) {
+        clone = newSV(0);
+        sv_upgrade(clone, SVt_PVOBJ);
+        /* Establish the empty-field state explicitly: the shell is live in
+         * hseen from here on, so sv_clear must be able to walk it even if
+         * cloning croaks before clone_fill_obj runs. */
+        ObjectFIELDS(clone) = NULL;
+        ObjectMAXFIELD(clone) = -1;
+        /* A class instance is always blessed, and sv_bless rejects a class
+         * stash, so stamp the class here rather than at each RV that points
+         * at it (which is what the AV/HV callers do via sv_bless). */
+        SvOBJECT_on(clone);
+        SvSTASH_set(clone, (HV *) SvREFCNT_inc(SvSTASH(ref)));
+    }
+#endif
+    else
+        clone = (SV *) newAV();
+
     CLONE_STORE(ref, clone);
     clone_queue_push(q, ref, clone);
 
@@ -224,10 +260,11 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
         /* Handled inline rather than through rv_clone_chain: a direct
          * reference to a container is by far the common case, and this
          * skips the chain walk for a chain of length one. */
-        if (referent
-            && (SvTYPE(referent) == SVt_PVAV || SvTYPE(referent) == SVt_PVHV)) {
+        if (referent && CLONE_IS_DEEP_CONTAINER(referent)) {
             SV *new_rv = newRV_noinc(clone_shell(referent, hseen, q));
-            if (SvOBJECT(referent))
+            /* clone_shell blesses a PVOBJ itself; sv_bless would croak on
+             * its class stash. */
+            if (SvOBJECT(referent) && !CLONE_IS_PVOBJ(referent))
                 sv_bless(new_rv, SvSTASH(referent));
             if (SvWEAKREF(e))
                 av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
@@ -294,6 +331,37 @@ clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
     }
 }
 
+#if PERL_VERSION >= 38
+/* PVOBJ counterpart of clone_fill_av: class instances store their fields
+ * in a flat SV* array indexed by field order, not in an AV. */
+static void
+clone_fill_obj(SV *src, SV *dst, HV *hseen, int rdepth, AV *weakrefs,
+               clone_queue *q)
+{
+    SSize_t maxfield = ObjectMAXFIELD(src);
+    SV **src_fields;
+    SV **dst_fields;
+    SSize_t fi;
+
+    if (maxfield < 0)
+        return;
+
+    src_fields = ObjectFIELDS(src);
+
+    /* Hand the zeroed array to the shell before populating it: a croak
+     * from a field's clone then frees what we have built so far instead of
+     * leaking it (sv_clear tolerates NULL field slots). */
+    Newxz(dst_fields, maxfield + 1, SV *);
+    ObjectFIELDS(dst) = dst_fields;
+    ObjectMAXFIELD(dst) = maxfield;
+
+    for (fi = 0; fi <= maxfield; fi++)
+        dst_fields[fi] = src_fields[fi]
+            ? clone_elem(src_fields[fi], hseen, rdepth, weakrefs, q)
+            : newSV(0);
+}
+#endif /* PERL_VERSION >= 38 */
+
 /* Fill every queued shell.  Tasks appended while draining are picked up
  * by the same loop, so the whole sub-graph is cloned without recursion.
  * q->items may be reallocated by clone_queue_push, hence the re-indexing
@@ -309,12 +377,16 @@ clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
 
         if (SvTYPE(src) == SVt_PVHV)
             clone_fill_hv((HV *)src, (HV *)dst, hseen, rdepth, weakrefs, q);
+#if PERL_VERSION >= 38
+        else if (SvTYPE(src) == SVt_PVOBJ)
+            clone_fill_obj(src, dst, hseen, rdepth, weakrefs, q);
+#endif
         else
             clone_fill_av((AV *)src, (AV *)dst, hseen, rdepth, weakrefs, q);
     }
 }
 
-/* Entry point for cloning an AV or HV past MAX_DEPTH. */
+/* Entry point for cloning an AV, HV or PVOBJ past MAX_DEPTH. */
 static SV *
 clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
 {
@@ -417,7 +489,7 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
     /* If we did not hit a cached referent above, current is now the non-RV
      * leaf; clone it based on its type. */
     if (!leaf_clone && current) {
-        if (SvTYPE(current) == SVt_PVAV || SvTYPE(current) == SVt_PVHV) {
+        if (CLONE_IS_DEEP_CONTAINER(current)) {
             leaf_clone = clone_shell(current, hseen, q);
         } else {
             seen = CLONE_FETCH(current);
@@ -475,7 +547,9 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
         SvREFCNT_dec(SvRV(new_rv));	/* drop the placeholder's undef  */
         SvRV_set(new_rv, result);	/* hands our reference to new_rv */
 
-        if (SvOBJECT(SvRV(rv)))
+        /* A PVOBJ referent was already blessed by clone_shell (sv_bless
+         * rejects a class stash). */
+        if (SvOBJECT(SvRV(rv)) && !CLONE_IS_PVOBJ(SvRV(rv)))
             sv_bless(new_rv, SvSTASH(SvRV(rv)));
         if (SvWEAKREF(rv))
             av_push(weakrefs, SvREFCNT_inc_simple_NN(new_rv));
@@ -713,7 +787,11 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
      * On Windows (1MB default stack), this overflows around depth 2000.
      * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
     if (rdepth > MAX_DEPTH) {
-        if (SvTYPE(ref) == SVt_PVAV || SvTYPE(ref) == SVt_PVHV) {
+        /* AV, HV and PVOBJ (class instances) all nest arbitrarily deep, so
+         * all three go through the work queue.  Without the PVOBJ case a
+         * deep class instance fell through to the share-with-warning
+         * fallback below and the "clone" aliased the original's fields. */
+        if (CLONE_IS_DEEP_CONTAINER(ref)) {
             return clone_container_iterative(ref, hseen, rdepth, weakrefs);
         }
         /* All RV types (AV, HV, scalar-ref chains) are handled uniformly
