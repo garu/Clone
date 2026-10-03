@@ -57,6 +57,7 @@ do {									\
 typedef struct {
     SV *src;	/* source AV or HV                                */
     SV *dst;	/* its clone, already registered in hseen, empty  */
+    int depth;	/* depth budget for this container's elements      */
 } clone_task;
 
 typedef struct {
@@ -74,9 +75,9 @@ typedef struct {
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
-static SV *clone_container_iterative(SV *, HV *, int, AV *);
-static SV *rv_clone_chain(SV *, HV *, int, AV *, clone_queue *);
-static SV *rv_clone_iterative(SV *, HV *, int, AV *);
+static SV *clone_container_iterative(SV *, HV *, int, int, AV *);
+static SV *rv_clone_chain(SV *, HV *, int, int, AV *, clone_queue *);
+static SV *rv_clone_iterative(SV *, HV *, int, int, AV *);
 static int clone_magic(SV *, SV *, HV *, int, AV *);
 
 #ifdef DEBUG_CLONE
@@ -171,7 +172,7 @@ clone_queue_free(pTHX_ void *p)
 }
 
 static void
-clone_queue_push(clone_queue *q, SV *src, SV *dst)
+clone_queue_push(clone_queue *q, SV *src, SV *dst, int depth)
 {
     if (q->len >= q->max) {
         q->max = q->max ? q->max * 2 : 64;
@@ -187,15 +188,23 @@ clone_queue_push(clone_queue *q, SV *src, SV *dst)
      * hseen holds one.  clone_queue_free releases these. */
     q->items[q->len].src = SvREFCNT_inc_simple_NN(src);
     q->items[q->len].dst = dst;
+    q->items[q->len].depth = depth;
     q->len++;
 }
 
 /* Return the clone of a container (AV or HV), creating an empty shell and
  * queueing it for filling the first time we see it.  Registering the shell
  * in hseen before it is filled is what makes circular references safe.
- * The returned SV carries one reference for the caller. */
+ * The returned SV carries one reference for the caller.
+ *
+ * depth is this container's own budget and is never 0: callers honour
+ * "share, don't clone" before asking for a shell.  The queued task records
+ * the budget for its *elements*, one unit lower, pinning at -1 (unlimited)
+ * exactly as av_clone/hv_clone do.  Like hseen itself the cache is
+ * depth-agnostic: a container reachable at two different depths is cloned
+ * once, at whichever depth reached it first — same as the recursive path. */
 static SV *
-clone_shell(SV *ref, HV *hseen, clone_queue *q)
+clone_shell(SV *ref, HV *hseen, int depth, clone_queue *q)
 {
     SV **seen;
     SV *clone;	/* named to match CLONE_STORE's TRACEME under DEBUG_CLONE */
@@ -205,18 +214,29 @@ clone_shell(SV *ref, HV *hseen, clone_queue *q)
 
     clone = (SvTYPE(ref) == SVt_PVHV) ? (SV *) newHV() : (SV *) newAV();
     CLONE_STORE(ref, clone);
-    clone_queue_push(q, ref, clone);
+    clone_queue_push(q, ref, clone, depth > 0 ? depth - 1 : -1);
 
     return clone;
 }
 
 /* Clone one element of a container without recursing into nested
- * containers: those become queued tasks instead. */
+ * containers: those become queued tasks instead.
+ *
+ * depth is the element's own budget (the parent task's recorded depth). */
 static SV *
-clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
+clone_elem(SV *e, HV *hseen, int depth, int rdepth, AV *weakrefs,
+           clone_queue *q)
 {
     if (!e)
         return NULL;
+
+    /* depth == 0 means "share, don't clone", exactly as in sv_clone.  It
+     * has to be honoured here rather than being left to the sv_clone call
+     * at the bottom: the container and RV-chain branches below never reach
+     * sv_clone, so without this the explicit depth cap was silently
+     * dropped for every level past MAX_DEPTH. */
+    if (depth == 0)
+        return SvREFCNT_inc(e);
 
     if (SvROK(e)) {
         SV *referent = SvRV(e);
@@ -226,7 +246,7 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
          * skips the chain walk for a chain of length one. */
         if (referent
             && (SvTYPE(referent) == SVt_PVAV || SvTYPE(referent) == SVt_PVHV)) {
-            SV *new_rv = newRV_noinc(clone_shell(referent, hseen, q));
+            SV *new_rv = newRV_noinc(clone_shell(referent, hseen, depth, q));
             if (SvOBJECT(referent))
                 sv_bless(new_rv, SvSTASH(referent));
             if (SvWEAKREF(e))
@@ -236,18 +256,18 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
 
         /* Scalar-ref chain: walked iteratively, container leaves rejoin
          * this queue. */
-        return rv_clone_chain(e, hseen, rdepth, weakrefs, q);
+        return rv_clone_chain(e, hseen, depth, rdepth, weakrefs, q);
     }
 
     /* Plain scalar leaf.  rdepth is above MAX_DEPTH here, so sv_clone
      * takes its non-recursive branch (newSVsv, or share-with-warning for
      * types that cannot be copied at all). */
-    return sv_clone(e, hseen, 1, rdepth, weakrefs);
+    return sv_clone(e, hseen, depth, rdepth, weakrefs);
 }
 
 static void
-clone_fill_av(AV *src, AV *dst, HV *hseen, int rdepth, AV *weakrefs,
-              clone_queue *q)
+clone_fill_av(AV *src, AV *dst, HV *hseen, int depth, int rdepth,
+              AV *weakrefs, clone_queue *q)
 {
     SV **svp;
     SV **slot;
@@ -266,14 +286,14 @@ clone_fill_av(AV *src, AV *dst, HV *hseen, int rdepth, AV *weakrefs,
     for (i = 0; i <= arrlen; i++) {
         svp = av_fetch(src, i, 0);
         if (svp)
-            slot[i] = clone_elem(*svp, hseen, rdepth, weakrefs, q);
+            slot[i] = clone_elem(*svp, hseen, depth, rdepth, weakrefs, q);
     }
     AvFILLp(dst) = arrlen;
 }
 
 static void
-clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
-              clone_queue *q)
+clone_fill_hv(HV *src, HV *dst, HV *hseen, int depth, int rdepth,
+              AV *weakrefs, clone_queue *q)
 {
     HE *next;
 
@@ -285,7 +305,7 @@ clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
     while ((next = hv_iternext(src))) {
         I32 klen;
         char *kpv = hv_iterkey(next, &klen);
-        SV *val = clone_elem(hv_iterval(src, next), hseen, rdepth,
+        SV *val = clone_elem(hv_iterval(src, next), hseen, depth, rdepth,
                              weakrefs, q);
         /* Negate klen for UTF-8 keys per Perl API convention. */
         if (HeKUTF8(next))
@@ -306,17 +326,23 @@ clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
     for (i = 0; i < q->len; i++) {
         SV *src = q->items[i].src;
         SV *dst = q->items[i].dst;
+        int depth = q->items[i].depth;	/* read before any push reallocs */
 
         if (SvTYPE(src) == SVt_PVHV)
-            clone_fill_hv((HV *)src, (HV *)dst, hseen, rdepth, weakrefs, q);
+            clone_fill_hv((HV *)src, (HV *)dst, hseen, depth, rdepth,
+                          weakrefs, q);
         else
-            clone_fill_av((AV *)src, (AV *)dst, hseen, rdepth, weakrefs, q);
+            clone_fill_av((AV *)src, (AV *)dst, hseen, depth, rdepth,
+                          weakrefs, q);
     }
 }
 
-/* Entry point for cloning an AV or HV past MAX_DEPTH. */
+/* Entry point for cloning an AV or HV past MAX_DEPTH.  depth is the
+ * caller's remaining budget from clone($ref, $depth) and is never 0 —
+ * sv_clone honours "share, don't clone" before dispatching here. */
 static SV *
-clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+clone_container_iterative(SV * ref, HV* hseen, int depth, int rdepth,
+                          AV * weakrefs)
 {
     clone_queue *q;
     SV *root_clone;
@@ -327,7 +353,7 @@ clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     ENTER;
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
-    root_clone = clone_shell(ref, hseen, q);
+    root_clone = clone_shell(ref, hseen, depth, q);
     clone_drain(q, hseen, rdepth, weakrefs);
 
     LEAVE;
@@ -344,9 +370,14 @@ clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
  *
  * A container at the end of the chain is handed to the caller's work
  * queue rather than cloned inline, so an alternating ref/container
- * structure costs no C stack either. */
+ * structure costs no C stack either.
+ *
+ * depth stays constant along the chain: dereferencing an RV does not
+ * consume a depth unit (only containers do), so every link is copied and
+ * the budget is spent by the container at the end of the chain, if any. */
 static SV *
-rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
+rv_clone_chain(SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs,
+               clone_queue *q)
 {
     SV **chain;
     I32 chain_len;
@@ -418,7 +449,7 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
      * leaf; clone it based on its type. */
     if (!leaf_clone && current) {
         if (SvTYPE(current) == SVt_PVAV || SvTYPE(current) == SVt_PVHV) {
-            leaf_clone = clone_shell(current, hseen, q);
+            leaf_clone = clone_shell(current, hseen, depth, q);
         } else {
             seen = CLONE_FETCH(current);
             if (seen) {
@@ -491,7 +522,7 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
 /* Entry point for cloning a reference past MAX_DEPTH: owns the work
  * queue that rv_clone_chain and clone_elem feed. */
 static SV *
-rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
+rv_clone_iterative(SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
     clone_queue *q;
     SV *result;
@@ -500,7 +531,7 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     ENTER;
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
-    result = rv_clone_chain(ref, hseen, rdepth, weakrefs, q);
+    result = rv_clone_chain(ref, hseen, depth, rdepth, weakrefs, q);
     clone_drain(q, hseen, rdepth, weakrefs);
 
     LEAVE;
@@ -714,7 +745,8 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
      * When we exceed MAX_DEPTH, handle both AV and RV-to-AV cases. */
     if (rdepth > MAX_DEPTH) {
         if (SvTYPE(ref) == SVt_PVAV || SvTYPE(ref) == SVt_PVHV) {
-            return clone_container_iterative(ref, hseen, rdepth, weakrefs);
+            return clone_container_iterative(ref, hseen, depth, rdepth,
+                                             weakrefs);
         }
         /* All RV types (AV, HV, scalar-ref chains) are handled uniformly
          * by rv_clone_iterative, which walks the reference chain, hands
@@ -723,7 +755,7 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
          * (The AV/HV cases were previously inlined here but lacked weakref
          * handling — see GH #107, #116, #119 for the iterative gap pattern.) */
         if (SvROK(ref))
-            return rv_clone_iterative(ref, hseen, rdepth, weakrefs);
+            return rv_clone_iterative(ref, hseen, depth, rdepth, weakrefs);
         /* Simple scalars (non-reference, non-container) can always be
          * safely copied without recursion.  newSVsv creates an independent
          * copy, preventing aliasing of leaf values inside iteratively-cloned
