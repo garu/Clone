@@ -1,5 +1,11 @@
 Revision history for Perl module Clone
 
+0.52 (unreleased)
+  - tests: skip t/16-threads-shared.t when threads::shared predates
+    shared_clone() (1.21), fixing a hard failure on perl 5.10.0 (GH #161)
+  - tests: skip t/17-threads-classdbi.t's thread subtests on perl 5.10.0,
+    whose ithreads SEGV at thread creation independently of Clone (GH #161)
+
 0.51 2026-10-01 atoomic
   - fix: clone deep hash and mixed array/hash structures past MAX_DEPTH
     without C stack growth (GH #121, GH #146)
