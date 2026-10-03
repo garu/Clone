@@ -6,8 +6,9 @@ on 'test' => sub {
     requires 'B::COW';
     recommends 'DBD::SQLite';
     recommends 'DBI';
-    recommends 'Class::DBI';    
+    recommends 'Class::DBI';
     recommends 'Math::BigInt::GMP';
+    recommends 'Test::LeakTrace';
 };
 
 on 'devel' => sub {
