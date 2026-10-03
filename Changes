@@ -7,6 +7,11 @@ Revision history for Perl module Clone
     .t/.pl/.pm/.PL files against 5.10+ syntax, plus a CI job to run it
     (the old-perl CI images are unthreaded, so they exit in BEGIN before
     parsing the thread tests -- which is why GH #162 reached CPAN)
+  - tests: skip t/16-threads-shared.t when threads::shared predates
+    shared_clone() (1.21), fixing a hard failure on perl 5.10.0 (GH #161)
+  - tests: skip t/17-threads-classdbi.t's thread subtests on perl 5.10.0,
+    which SEGV at thread creation; suspected perl 5.10.0 ithreads bug,
+    not yet reproduced, so a Clone bug is not ruled out (GH #161)
 
 0.51 2026-10-01 atoomic
   - fix: clone deep hash and mixed array/hash structures past MAX_DEPTH

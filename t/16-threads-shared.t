@@ -38,6 +38,21 @@ BEGIN {
         plan skip_all => "threads::shared module not available: $@";
         exit 0;
     }
+
+    # shared_clone() arrived in threads::shared 1.21 (2008-05-14). Perl
+    # 5.10.0 bundles 1.14, where every test below dies with "Undefined
+    # subroutine &main::shared_clone". See GH #161. 5.8.9 ships 1.27 and
+    # 5.10.1 ships 1.29, so 5.10.0 is the only affected core release.
+    unless (eval { threads::shared->VERSION(1.21); 1 }) {
+        # No '//' here: this block is compiled even on 5.8.x, which has no
+        # defined-or operator. (The test body below escapes that because
+        # the BEGIN-time exit happens before it is compiled.)
+        my $have = threads::shared->VERSION;
+        $have = 'unknown' unless defined $have;
+        plan skip_all =>
+            "threads::shared 1.21+ required for shared_clone() (have $have)";
+        exit 0;
+    }
 }
 
 use threads;
