@@ -152,7 +152,7 @@ use Clone qw(clone);
         my $cloned = eval { clone($shared) };
         return {
             ok    => !$@,
-            error => $@ // '',
+            error => defined $@ ? $@ : '',
             val   => $cloned ? $cloned->{key} : undef,
         };
     });

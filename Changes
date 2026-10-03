@@ -1,6 +1,12 @@
 Revision history for Perl module Clone
 
 0.52 (unreleased)
+  - fix: stop using the 5.10 defined-or operator (//) in t/16 and t/17,
+    which made both files fail to compile on threaded perl 5.8 (GH #162)
+  - test: add t/33-perl58-syntax.t, a static check guarding shipped
+    .t/.pl/.pm/.PL files against 5.10+ syntax, plus a CI job to run it
+    (the old-perl CI images are unthreaded, so they exit in BEGIN before
+    parsing the thread tests -- which is why GH #162 reached CPAN)
   - tests: skip t/16-threads-shared.t when threads::shared predates
     shared_clone() (1.21), fixing a hard failure on perl 5.10.0 (GH #161)
   - tests: skip t/17-threads-classdbi.t's thread subtests on perl 5.10.0,
