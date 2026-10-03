@@ -41,6 +41,8 @@ t/29-depth-zero-boundary.t
 t/30-edge-cases.t
 t/31-depth-parameter.t
 t/32-tied-mgobj-leak.t
+t/33-croak-cleanup.t
+t/34-stack-realloc.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
