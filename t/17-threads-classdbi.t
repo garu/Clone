@@ -241,7 +241,8 @@ subtest 'clone with many hash keys across threads' => sub {
         return { ok => $ok };
     });
     ok($result->{ok}, 'clone with many hash keys works across threads')
-        or diag("Error: " . ($result->{error} // 'value mismatch'));
+        or diag("Error: "
+            . (defined $result->{error} ? $result->{error} : 'value mismatch'));
 };
 
 

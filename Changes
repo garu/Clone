@@ -1,5 +1,11 @@
 Revision history for Perl module Clone
 
+0.52 (unreleased)
+  - fix: stop using the 5.10 defined-or operator (//) in t/16 and t/17,
+    which made both files fail to compile on threaded perl 5.8 (GH #162)
+  - test: add t/33-perl58-syntax.t guarding against 5.10+ syntax in
+    shipped .t/.pl/.pm files
+
 0.51 2026-10-01 atoomic
   - fix: clone deep hash and mixed array/hash structures past MAX_DEPTH
     without C stack growth (GH #121, GH #146)
