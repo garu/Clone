@@ -139,11 +139,30 @@ nested scalar references). The fallback drives nested containers
 through a heap-allocated work queue, so its C stack usage does not
 grow with nesting depth whatever the shape of the data.
 
-Non-clonable types (globs, code references, formats, IO handles)
-are always shared regardless of depth. Encountering one directly as
-a container element past the depth limit also emits a warning (one
-reached through a reference is shared silently, as at any depth).
-To silence it:
+Non-clonable types (globs, code references, formats, IO handles,
+lvalues, compiled regexps) are always shared with the original rather
+than copied -- at every depth, not just past the limit.
+
+Below the limit this happens silently. Past it, Clone says so once per
+C<clone()> call, naming the type it could not copy:
+
+    Clone: cannot deep-copy GLOB, sharing it with the original
+    (reached depth limit 4000; further occurrences in this clone are
+    not reported)
+
+The notice is not a report of degraded behaviour -- the same SV would
+have been shared at depth 1. It exists because crossing the limit puts
+Clone on its iterative path, and that is worth surfacing once. It is
+emitted at most once per C<clone()> call however many non-clonable SVs
+the structure holds, so a large graph cannot flood C<STDERR>.
+
+It belongs to the C<recursion> warnings category and is on by default.
+Control it lexically:
+
+    no warnings 'recursion';                # silence it
+    use warnings FATAL => 'recursion';      # make it fatal
+
+Or globally, for callers that cannot reach the relevant scope:
 
     $Clone::WARN = 0;
 

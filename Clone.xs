@@ -52,6 +52,54 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
+/* Sentinel key marking "the shared-not-copied warning already fired for
+ * this clone() call".  hseen is allocated per call, so parking the flag
+ * there needs no extra plumbing through sv_clone's six-argument signature.
+ * Every other hseen key is an SV address of exactly PTRSIZE bytes, so a
+ * longer key cannot collide with one. */
+#define CLONE_WARNED_KEY	"Clone::shared-warned"
+#define CLONE_WARNED_KEYLEN	(sizeof(CLONE_WARNED_KEY) - 1)
+
+/* Report, at most once per clone() call, that a non-clonable SV is being
+ * shared with the original instead of copied.
+ *
+ * Only the past-MAX_DEPTH paths report this: below the limit the very same
+ * types are shared silently, so the message must not claim the depth limit
+ * caused the sharing -- it only caused Clone to mention it.
+ *
+ * Suppression, in order of precedence:
+ *   - lexical pragma: no warnings 'recursion';   (also FATAL-able)
+ *   - legacy global:  $Clone::WARN = 0;
+ * ckWARN_d means the warning is on unless the caller's scope turns the
+ * category off, preserving the historical warn-by-default behaviour. */
+static void
+clone_warn_shared(pTHX_ SV *ref, HV *hseen)
+{
+    SV *global_switch;
+
+    if (!ckWARN_d(WARN_RECURSION))
+        return;
+
+    global_switch = get_sv("Clone::WARN", 0);
+    if (global_switch && !SvTRUE(global_switch))
+        return;
+
+    if (hv_fetch(hseen, CLONE_WARNED_KEY, CLONE_WARNED_KEYLEN, 0))
+        return;
+
+    /* Set the flag before warning: a FATAL-ized warning or a dying
+     * __WARN__ handler longjmps out of here, and on re-entry (a nested
+     * clone inside the handler) we must not loop. */
+    (void) hv_store(hseen, CLONE_WARNED_KEY, CLONE_WARNED_KEYLEN,
+                    newSViv(1), 0);
+
+    Perl_warner(aTHX_ packWARN(WARN_RECURSION),
+                "Clone: cannot deep-copy %s, sharing it with the original "
+                "(reached depth limit %d; further occurrences in this "
+                "clone are not reported)",
+                sv_reftype(ref, 0), MAX_DEPTH);
+}
+
 /* Work item for the iterative (past-MAX_DEPTH) cloner: a source
  * container paired with its already-allocated clone shell. */
 typedef struct {
@@ -428,7 +476,12 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
                  * switch (PVCV/PVGV/PVFM/PVIO/PVLV/REGEXP/BM): newSVsv()
                  * croaks on these ("Bizarre copy of CODE in subroutine
                  * entry") or stringifies them.  Share via SvREFCNT_inc
-                 * instead. */
+                 * instead, and report it through the same once-per-call
+                 * warning sv_clone's own past-MAX_DEPTH guard uses -- the
+                 * two sites share the identical type list, so reaching a
+                 * glob through a deep ref chain and reaching one as a deep
+                 * container element must not differ in what the caller is
+                 * told. */
                 switch (SvTYPE(current)) {
 #if PERL_VERSION <= 8
                     case SVt_PVBM:	/* 8 */
@@ -440,6 +493,7 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
                     case SVt_PVGV:	/* 13 */
                     case SVt_PVFM:	/* 14 */
                     case SVt_PVIO:	/* 15 */
+                        clone_warn_shared(aTHX_ current, hseen);
                         leaf_clone = SvREFCNT_inc(current);
                         break;
                     default:
@@ -747,14 +801,9 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
                 break;
         }
         /* Non-clonable types past MAX_DEPTH (e.g. PVGV, PVCV, PVFM, PVIO):
-         * these cannot be deep-copied regardless of depth; share with a
-         * warning. */
-        {
-            SV *warn_sv = get_sv("Clone::WARN", 0);
-            if (!warn_sv || SvTRUE(warn_sv))
-                Perl_warn(aTHX_ "Clone: depth limit (%d) exceeded; "
-                          "reference will be shared, not deep-copied", MAX_DEPTH);
-        }
+         * these cannot be deep-copied regardless of depth; share them, and
+         * say so once per clone() call. */
+        clone_warn_shared(aTHX_ ref, hseen);
         return SvREFCNT_inc(ref);
     }
 

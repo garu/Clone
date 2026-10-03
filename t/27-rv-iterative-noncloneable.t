@@ -4,6 +4,11 @@ use warnings;
 use Test::More;
 use Clone qw(clone);
 
+# Sharing a non-clonable leaf past MAX_DEPTH is reported once per clone()
+# call.  That is the point of this file, not a surprise -- silence it so the
+# harness output stays clean.  See t/33-depth-warning.t for its coverage.
+no warnings 'recursion';
+
 # Regression: rv_clone_iterative() called newSVsv() unconditionally for any
 # non-AV/HV leaf.  When the leaf was a non-cloneable type (CV, GV, IO, FM,
 # LV, BM/REGEXP), sv_setsv croaked ("Bizarre copy of CODE in subroutine
