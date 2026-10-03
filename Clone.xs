@@ -74,6 +74,8 @@ typedef struct {
 static SV *hv_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *av_clone (SV *, SV *, HV *, int, int, AV *);
 static SV *sv_clone (SV *, HV *, int, int, AV *);
+static void hv_store_cloned(HV *, HV *, HV *, int, int, AV *, clone_queue *);
+static void av_store_cloned(AV *, AV *, HV *, int, int, AV *, clone_queue *);
 static SV *clone_container_iterative(SV *, HV *, int, AV *);
 static SV *rv_clone_chain(SV *, HV *, int, AV *, clone_queue *);
 static SV *rv_clone_iterative(SV *, HV *, int, AV *);
@@ -106,30 +108,13 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 {
   HV *clone = (HV *) target;
   HV *self = (HV *) ref;
-  HE *next = NULL;
-  int recur = depth ? depth - 1 : 0;
 
   assert(SvTYPE(ref) == SVt_PVHV);
 
   TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
-  /* Pre-size the target hash to avoid incremental resizing */
-  if (HvKEYS(self) > 0)
-    hv_ksplit(clone, HvKEYS(self));
-
-  hv_iterinit (self);
-  while ((next = hv_iternext (self)))
-    {
-      I32 klen;
-      char *kpv = hv_iterkey(next, &klen);
-      SV *val = sv_clone(hv_iterval(self, next), hseen, recur, rdepth, weakrefs);
-      /* Use hv_iterkey + HeHASH to avoid allocating a mortal SV per key.
-       * Negate klen for UTF-8 keys per Perl API convention. */
-      if (HeKUTF8(next))
-        klen = -klen;
-      TRACEME(("clone item %.*s\n", (int)(klen > 0 ? klen : -klen), kpv));
-      hv_store(clone, kpv, klen, val, HeHASH(next));
-    }
+  /* NULL queue: clone each value recursively (see hv_store_cloned). */
+  hv_store_cloned(self, clone, hseen, depth, rdepth, weakrefs, NULL);
 
   TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
   return (SV *) clone;
@@ -245,14 +230,45 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
     return sv_clone(e, hseen, 1, rdepth, weakrefs);
 }
 
+/* ------------------------------------------------------------------- *
+ * Shared element-store loops
+ *
+ * Filling a fresh container from its source is identical on both paths --
+ * the recursive cloner (hv_clone / av_clone) and the past-MAX_DEPTH work
+ * queue (clone_drain) -- and the mechanics are not trivial: UTF-8 keys
+ * need a negated klen for hv_store, HeHASH is reused to avoid a mortal SV
+ * per key, and array slots are written straight through AvARRAY with the
+ * fill mark set afterwards.  Keeping two copies of that let the paths
+ * drift, so both now call these.
+ *
+ * The only per-path difference is how one element is cloned, and that is
+ * the `q` argument:
+ *
+ *   q == NULL  recursive path: descend into the element immediately via
+ *              sv_clone, spending one unit of the `depth` budget.
+ *   q != NULL  iterative path: clone_elem defers nested containers to the
+ *              work queue instead of recursing.
+ *
+ * `depth` is read only on the recursive path.  The iterative one does not
+ * track the caller's depth budget at all -- clone_elem passes a fixed
+ * non-zero depth to sv_clone -- so clone_drain passes -1.  That is a
+ * pre-existing gap, not something this sharing introduced: a budget still
+ * unspent when rdepth crosses MAX_DEPTH is simply never spent.
+ * ------------------------------------------------------------------- */
+
 static void
-clone_fill_av(AV *src, AV *dst, HV *hseen, int rdepth, AV *weakrefs,
-              clone_queue *q)
+av_store_cloned(AV *src, AV *dst, HV *hseen, int depth, int rdepth,
+                AV *weakrefs, clone_queue *q)
 {
     SV **svp;
     SV **slot;
     I32 arrlen;
     I32 i;
+    /* depth is never 0 here: sv_clone returns SvREFCNT_inc(ref) on
+     * depth == 0 before dispatching to a container cloner.  depth < 0
+     * means unlimited (the XS default is -1), hence the pin at -1 rather
+     * than an unbounded decrement. */
+    int recur = depth > 0 ? depth - 1 : -1;
 
     arrlen = av_len(src);
     if (arrlen < 0)
@@ -261,23 +277,27 @@ clone_fill_av(AV *src, AV *dst, HV *hseen, int rdepth, AV *weakrefs,
     av_extend(dst, arrlen);
 
     /* Fetch from the source (which may be magical) but write straight
-     * into the target's AvARRAY: we just created it, so it has no magic. */
+     * into the target's AvARRAY: we just created it, so it has no magic.
+     * Slots av_extend zeroed are left alone, preserving the source's
+     * holes. */
     slot = AvARRAY(dst);
     for (i = 0; i <= arrlen; i++) {
         svp = av_fetch(src, i, 0);
         if (svp)
-            slot[i] = clone_elem(*svp, hseen, rdepth, weakrefs, q);
+            slot[i] = q ? clone_elem(*svp, hseen, rdepth, weakrefs, q)
+                        : sv_clone(*svp, hseen, recur, rdepth, weakrefs);
     }
     AvFILLp(dst) = arrlen;
 }
 
 static void
-clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
-              clone_queue *q)
+hv_store_cloned(HV *src, HV *dst, HV *hseen, int depth, int rdepth,
+                AV *weakrefs, clone_queue *q)
 {
     HE *next;
+    int recur = depth > 0 ? depth - 1 : -1;	/* see av_store_cloned */
 
-    /* Pre-size to avoid incremental resizing */
+    /* Pre-size the target hash to avoid incremental resizing */
     if (HvKEYS(src) > 0)
         hv_ksplit(dst, HvKEYS(src));
 
@@ -285,11 +305,16 @@ clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
     while ((next = hv_iternext(src))) {
         I32 klen;
         char *kpv = hv_iterkey(next, &klen);
-        SV *val = clone_elem(hv_iterval(src, next), hseen, rdepth,
-                             weakrefs, q);
-        /* Negate klen for UTF-8 keys per Perl API convention. */
+        SV *val = hv_iterval(src, next);
+
+        val = q ? clone_elem(val, hseen, rdepth, weakrefs, q)
+                : sv_clone(val, hseen, recur, rdepth, weakrefs);
+
+        /* Use hv_iterkey + HeHASH to avoid allocating a mortal SV per key.
+         * Negate klen for UTF-8 keys per Perl API convention. */
         if (HeKUTF8(next))
             klen = -klen;
+        TRACEME(("clone item %.*s\n", (int)(klen > 0 ? klen : -klen), kpv));
         hv_store(dst, kpv, klen, val, HeHASH(next));
     }
 }
@@ -307,10 +332,15 @@ clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
         SV *src = q->items[i].src;
         SV *dst = q->items[i].dst;
 
+        /* Non-NULL queue: nested containers are deferred rather than
+         * recursed into, and this path does not track the caller's depth
+         * budget -- hence the -1.  See hv_store_cloned's header. */
         if (SvTYPE(src) == SVt_PVHV)
-            clone_fill_hv((HV *)src, (HV *)dst, hseen, rdepth, weakrefs, q);
+            hv_store_cloned((HV *)src, (HV *)dst, hseen, -1, rdepth,
+                            weakrefs, q);
         else
-            clone_fill_av((AV *)src, (AV *)dst, hseen, rdepth, weakrefs, q);
+            av_store_cloned((AV *)src, (AV *)dst, hseen, -1, rdepth,
+                            weakrefs, q);
     }
 }
 
@@ -644,41 +674,18 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
 static SV *
 av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
-    AV *clone;
-    AV *self;
-    SV **svp;
-    SV **dst;
-    I32 arrlen = 0;
-    I32 i;
-    int recur;
+    AV *clone = (AV *) target;
+    AV *self = (AV *) ref;
 
-    /* Note: depth is never 0 here.  sv_clone() returns SvREFCNT_inc(ref) on
-     * depth == 0 before dispatching to av_clone.  depth < 0 means unlimited
-     * (the XS default is -1), which is why recur pins at -1 below instead of
-     * decrementing.  Deep structures do not reach here either -- sv_clone's
+    /* Note: deep structures do not reach here -- sv_clone's
      * rdepth > MAX_DEPTH guard hands them to clone_container_iterative. */
-
-    clone = (AV *) target;
-    self = (AV *) ref;
-    recur = depth > 0 ? depth - 1 : -1;
 
     assert(SvTYPE(ref) == SVt_PVAV);
 
     TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
-    arrlen = av_len(self);
-    av_extend(clone, arrlen);
-
-    /* Use av_fetch on the source (may be magical/tied) but write
-     * directly to the target's AvARRAY (we just created it, no magic). */
-    dst = AvARRAY(clone);
-    for (i = 0; i <= arrlen; i++) {
-        svp = av_fetch(self, i, 0);
-        if (svp) {
-            dst[i] = sv_clone(*svp, hseen, recur, rdepth, weakrefs);
-        }
-    }
-    AvFILLp(clone) = arrlen;
+    /* NULL queue: clone each element recursively (see av_store_cloned). */
+    av_store_cloned(self, clone, hseen, depth, rdepth, weakrefs, NULL);
 
     TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
     return (SV *) clone;
