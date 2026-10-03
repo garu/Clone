@@ -567,10 +567,15 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
        * name/namlen: with a cached length its savepvn() reads mg_len
        * bytes out of a 32-byte buffer, copying adjacent heap into the
        * clone (and segfaulting on a large enough string).  Attach the
-       * magic with no name and install both fields by hand. */
+       * magic with no name and install both fields by hand.
+       *
+       * obj is passed as NULL on purpose: perl only ever creates 'w'
+       * magic with obj == 0 (S_utf8_mg_pos_cache_update), and forwarding
+       * mg_obj here would make the clone hold a counted reference to the
+       * *source's* SV instead of a cloned one. */
       if (mg->mg_type == PERL_MAGIC_utf8)
       {
-        MAGIC *new_mg = sv_magicext(clone, mg->mg_obj, mg->mg_type,
+        MAGIC *new_mg = sv_magicext(clone, NULL, mg->mg_type,
                                     mg->mg_virtual, NULL, 0);
         if (mg->mg_ptr)
         {
