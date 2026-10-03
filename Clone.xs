@@ -101,6 +101,54 @@ is_threads_shared_tie(SV *obj)
       && strEQ(HvNAME(stash), "threads::shared::tie");
 }
 
+/* HvRITER_set/HvEITER_set are 5.9.3; on older perls xhv_riter/xhv_eiter
+ * are plain lvalue struct members reachable through HvRITER/HvEITER. */
+#ifndef HvRITER_get
+#  define HvRITER_get(hv)     HvRITER(hv)
+#endif
+#ifndef HvEITER_get
+#  define HvEITER_get(hv)     HvEITER(hv)
+#endif
+#ifndef HvRITER_set
+#  define HvRITER_set(hv, r)  (HvRITER(hv) = (r))
+#endif
+#ifndef HvEITER_set
+#  define HvEITER_set(hv, e)  (HvEITER(hv) = (e))
+#endif
+
+/* Walking a source hash with hv_iterinit()/hv_iternext() uses the hash's
+ * one and only iterator -- the same cursor each() and keys() rely on. A
+ * caller that clones a hash (or anything reaching it) from inside an
+ * each() loop over that hash would otherwise find the loop silently
+ * rewound. Snapshot the cursor before iterating, put it back after.
+ *
+ * HvLAZYDEL means HvEITER points at an entry already deleted and kept
+ * alive only for the current iteration; hv_iterinit() frees it, so there
+ * is nothing safe to restore -- keep the bucket index alone. */
+typedef struct {
+    I32 riter;
+    HE *eiter;
+} hv_cursor;
+
+static void
+hv_iterinit_saving(HV *hv, hv_cursor *saved)
+{
+    saved->riter = HvRITER_get(hv);
+    saved->eiter = HvEITER_get(hv);
+    if (saved->eiter && HvLAZYDEL(hv))
+        saved->eiter = NULL;
+    hv_iterinit(hv);
+}
+
+/* On perls with the iterator in an aux struct both setters are no-ops when
+ * there is nothing to restore, so this never allocates aux needlessly. */
+static void
+hv_iterinit_restore(HV *hv, const hv_cursor *saved)
+{
+    HvRITER_set(hv, saved->riter);
+    HvEITER_set(hv, saved->eiter);
+}
+
 static SV *
 hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs)
 {
@@ -108,6 +156,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
   HV *self = (HV *) ref;
   HE *next = NULL;
   int recur = depth ? depth - 1 : 0;
+  hv_cursor saved;
 
   assert(SvTYPE(ref) == SVt_PVHV);
 
@@ -117,7 +166,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
   if (HvKEYS(self) > 0)
     hv_ksplit(clone, HvKEYS(self));
 
-  hv_iterinit (self);
+  hv_iterinit_saving (self, &saved);
   while ((next = hv_iternext (self)))
     {
       I32 klen;
@@ -130,6 +179,7 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
       TRACEME(("clone item %.*s\n", (int)(klen > 0 ? klen : -klen), kpv));
       hv_store(clone, kpv, klen, val, HeHASH(next));
     }
+  hv_iterinit_restore (self, &saved);
 
   TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
   return (SV *) clone;
@@ -276,12 +326,13 @@ clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
               clone_queue *q)
 {
     HE *next;
+    hv_cursor saved;
 
     /* Pre-size to avoid incremental resizing */
     if (HvKEYS(src) > 0)
         hv_ksplit(dst, HvKEYS(src));
 
-    hv_iterinit(src);
+    hv_iterinit_saving(src, &saved);
     while ((next = hv_iternext(src))) {
         I32 klen;
         char *kpv = hv_iterkey(next, &klen);
@@ -292,6 +343,7 @@ clone_fill_hv(HV *src, HV *dst, HV *hseen, int rdepth, AV *weakrefs,
             klen = -klen;
         hv_store(dst, kpv, klen, val, HeHASH(next));
     }
+    hv_iterinit_restore(src, &saved);
 }
 
 /* Fill every queued shell.  Tasks appended while draining are picked up
