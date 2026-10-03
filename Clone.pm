@@ -147,18 +147,45 @@ To silence it:
 
     $Clone::WARN = 0;
 
-You can override the depth limit by passing it as the second argument
-to C<clone()>:
+The limit is a compile-time constant. It cannot be raised at runtime,
+and the second argument to C<clone()> does not do so -- see
+L</The depth argument> below.
 
-    my $copy = clone($data, 8000);  # allow deeper recursion
+=item * The depth argument
+
+C<clone()>'s optional second argument is a I<cap> on how far the copy
+goes, unrelated to the recursion limit above:
+
+    clone($data)        # unlimited (the default)
+    clone($data, 2)     # copy two container levels, share below that
+    clone($data, 0)     # no copy at all: returns $data itself
+
+Only hashes and arrays consume a depth unit; following a reference does
+not. Below the cap the "clone" shares the original's scalars, so writing
+to it writes to the original:
+
+    my $inner = { n => 1 };
+    my $copy  = clone({ child => $inner }, 1);
+    $copy->{child}{n} = 2;      # $inner->{n} is now 2 as well
+
+C<undef> and negative values mean unlimited, as does omitting the
+argument. Values larger than C<INT_MAX> are clamped rather than
+truncated. Anything that is not a number is a fatal error -- a silently
+coerced cap of 0 would hand back the original instead of a copy.
 
 =item * Filehandles and IO Objects
 
-Filehandles and IO objects are not deep-copied. The clone shares the
-same underlying filehandle object as the original (reference count is
-incremented). For DBI database handles, Clone skips opaque XS magic
-to avoid dangling pointers, but the resulting clone should not be used
-as a database handle.
+Filehandles and IO objects are not duplicated. A reference to a handle
+clones to the very same reference (its reference count is incremented),
+so the "clone" is the original handle: one file descriptor, one shared
+file position. Reading from one advances the other.
+
+    open my $fh, '<', $file;
+    my $copy = clone($fh);      # same handle, not a dup(2)
+
+For DBI database handles, Clone skips opaque XS magic to avoid dangling
+pointers, but the resulting clone should not be used as a database
+handle.
 
 =item * Code References
 
@@ -174,41 +201,27 @@ when cloning data structures across threads.
 
 =head1 PERFORMANCE
 
-Clone is implemented in C using Perl's XS interface, making it very fast
-for most use cases.
+Clone is implemented in C using Perl's XS interface and copies data
+structures directly, with no intermediate serialized form. On the shapes
+most programs clone it is the faster of the two obvious options: measured
+on perl 5.34 with Storable 3.23, Clone ran 1.3 to 3 times faster than
+L<Storable>'s C<dclone()> on structures nested up to a few dozen levels,
+and about twice as fast on wide, flat ones. The gap narrows as nesting
+grows; the two meet somewhere around a hundred levels, past which
+C<dclone()> is marginally ahead.
 
-=over 4
+Deep data is also where the two differ in kind rather than degree:
+C<dclone()> dies with "Max. recursion depth with nested structures
+exceeded" past C<$Storable::recursion_limit> (512 levels by default),
+while Clone copies arbitrarily deep structures through the iterative
+fallback described under L</LIMITATIONS>.
 
-=item * When to use Clone
+So reach for C<dclone()> when you want what it uniquely offers --
+serialization, C<freeze>/C<thaw>, a form you can put on disk or on the
+wire -- rather than for speed.
 
-Clone is optimized for speed and works best with:
-
-=over 4
-
-=item * Shallow to medium-depth structures (3 levels or fewer)
-
-=item * Data structures that need fast cloning in hot code paths
-
-=item * Structures containing blessed objects and tied variables
-
-=back
-
-=item * When to use Storable::dclone
-
-L<Storable>'s C<dclone()> may be faster for:
-
-=over 4
-
-=item * Very deep structures (4+ levels)
-
-=item * When you need serialization features
-
-=back
-
-=back
-
-Benchmarking your specific use case is recommended for performance-critical
-applications.
+Those figures are one machine, one perl, one data shape. Benchmark your
+own case if it is performance-critical.
 
 =head1 CAVEATS
 
@@ -217,7 +230,9 @@ applications.
 =item * Cloned objects are deep copies
 
 Changes to the clone do not affect the original, and vice versa. This
-includes nested references and objects.
+includes nested references and objects -- but only for a full clone: a
+depth-capped one shares everything below the cap, see
+L</The depth argument>.
 
 =item * Object internals
 
@@ -234,11 +249,10 @@ you have sufficient memory available.
 
 =head1 SEE ALSO
 
-L<Storable>'s C<dclone()> is a flexible solution for cloning variables,
-albeit slower for average-sized data structures. Simple
-and naive benchmarks show that Clone is faster for data structures
-with 3 or fewer levels, while C<dclone()> can be faster for structures
-4 or more levels deep.
+L<Storable>'s C<dclone()> is a flexible solution for cloning variables and
+the right tool when you also need serialization. For plain in-memory
+copies it is generally slower than Clone, and it refuses structures
+nested past C<$Storable::recursion_limit> -- see L</PERFORMANCE>.
 
 Other modules that may be of interest:
 

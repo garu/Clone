@@ -132,9 +132,19 @@ Clone properly handles circular references, preventing infinite loops:
 
 ## Limitations
 
-* **Maximum Recursion Depth**: Clone uses a recursion depth counter to prevent stack overflow. The default limit is 4000 rdepth units on Linux/macOS and 2000 on Windows/Cygwin. Each nesting level consumes approximately 2 rdepth units, so the effective limits are roughly 2000 nesting levels on Linux/macOS and 1000 on Windows/Cygwin. Exceeding the limit triggers an iterative fallback that still deep-copies arrays, hashes and all reference types (including deeply nested scalar references); it drives nested containers through a heap-allocated work queue, so its C stack usage does not grow with nesting depth. Only non-clonable types (globs, code refs, formats, IO handles) are shared past the limit, as they are at any depth. You can override the limit via `clone($data, $depth)`.
+* **Maximum Recursion Depth**: Clone uses a recursion depth counter to prevent stack overflow. The default limit is 4000 rdepth units on Linux/macOS and 2000 on Windows/Cygwin. Each nesting level consumes approximately 2 rdepth units, so the effective limits are roughly 2000 nesting levels on Linux/macOS and 1000 on Windows/Cygwin. Exceeding the limit triggers an iterative fallback that still deep-copies arrays, hashes and all reference types (including deeply nested scalar references); it drives nested containers through a heap-allocated work queue, so its C stack usage does not grow with nesting depth. Only non-clonable types (globs, code refs, formats, IO handles) are shared past the limit, as they are at any depth. The limit is a compile-time constant and cannot be raised at runtime — `clone($data, $depth)` does something else entirely, see the next bullet.
 
-* **Filehandles and IO Objects**: Filehandles and IO objects are cloned, but the underlying file descriptor is shared. Both the original and cloned filehandle will refer to the same file position. For DBI database handles and similar objects, Clone attempts to handle them safely, but behavior may vary depending on the object type.
+* **The depth argument**: `clone()`'s optional second argument is a *cap* on how far the copy goes, not a recursion-limit override. `clone($data, 2)` copies two container levels and shares everything below them; `clone($data, 0)` copies nothing and returns `$data` itself. Only hashes and arrays consume a depth unit — following a reference does not. Below the cap the "clone" shares the original's scalars, so writing to it writes to the original:
+
+```perl
+    my $inner = { n => 1 };
+    my $copy  = clone({ child => $inner }, 1);
+    $copy->{child}{n} = 2;      # $inner->{n} is now 2 as well
+```
+
+  `undef` and negative values mean unlimited, like omitting the argument; values above `INT_MAX` are clamped, not truncated; anything that is not a number is a fatal error.
+
+* **Filehandles and IO Objects**: Filehandles and IO objects are not duplicated. A reference to a handle clones to the very same reference (its reference count is incremented), so the "clone" *is* the original handle: one file descriptor, one shared file position — reading from one advances the other. For DBI database handles, Clone skips opaque XS magic to avoid dangling pointers, but the resulting clone should not be used as a database handle.
 
 * **Code References**: Code references (subroutines) are cloned by reference, not by value. The cloned coderef points to the same subroutine as the original.
 
@@ -142,26 +152,17 @@ Clone properly handles circular references, preventing infinite loops:
 
 ## Performance
 
-Clone is implemented in C using Perl's XS interface, making it very fast for most use cases.
+Clone is implemented in C using Perl's XS interface and copies data structures directly, with no intermediate serialized form. On the shapes most programs clone it is the faster of the two obvious options: measured on perl 5.34 with Storable 3.23, Clone ran 1.3 to 3 times faster than [Storable](https://metacpan.org/pod/Storable)'s `dclone()` on structures nested up to a few dozen levels, and about twice as fast on wide, flat ones. The gap narrows as nesting grows; the two meet somewhere around a hundred levels, past which `dclone()` is marginally ahead.
 
-**When to use Clone:**
+Deep data is also where the two differ in kind rather than degree: `dclone()` dies with *"Max. recursion depth with nested structures exceeded"* past `$Storable::recursion_limit` (512 levels by default), while Clone copies arbitrarily deep structures through the iterative fallback described under Limitations.
 
-Clone is optimized for speed and works best with:
-* Shallow to medium-depth structures (3 levels or fewer)
-* Data structures that need fast cloning in hot code paths
-* Structures containing blessed objects and tied variables
+So reach for `dclone()` when you want what it uniquely offers — serialization, `freeze`/`thaw`, a form you can put on disk or on the wire — rather than for speed.
 
-**When to use Storable::dclone:**
-
-[Storable](https://metacpan.org/pod/Storable)'s `dclone()` may be faster for:
-* Very deep structures (4+ levels)
-* When you need serialization features
-
-Benchmarking your specific use case is recommended for performance-critical applications.
+Those figures are one machine, one perl, one data shape. Benchmark your own case if it is performance-critical.
 
 ## Caveats
 
-* **Cloned objects are deep copies**: Changes to the clone do not affect the original, and vice versa. This includes nested references and objects.
+* **Cloned objects are deep copies**: Changes to the clone do not affect the original, and vice versa. This includes nested references and objects — but only for a full clone: a depth-capped one shares everything below the cap, see *The depth argument* under Limitations.
 
 * **Object internals**: While Clone handles most blessed objects correctly, objects with XS components or complex internal state may not clone as expected. Test thoroughly with your specific object types.
 
@@ -192,11 +193,10 @@ Contributions are welcome! Please:
 
 ## See Also
 
-[Storable](https://metacpan.org/pod/Storable)'s `dclone()` is a flexible solution for cloning variables,
-albeit slower for average-sized data structures. Simple
-and naive benchmarks show that Clone is faster for data structures
-with 3 or fewer levels, while `dclone()` can be faster for structures
-4 or more levels deep.
+[Storable](https://metacpan.org/pod/Storable)'s `dclone()` is a flexible solution for cloning
+variables and the right tool when you also need serialization. For plain
+in-memory copies it is generally slower than Clone, and it refuses structures
+nested past `$Storable::recursion_limit` — see Performance above.
 
 Other modules that may be of interest:
 

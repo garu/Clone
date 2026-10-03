@@ -1032,14 +1032,40 @@ MODULE = Clone		PACKAGE = Clone
 PROTOTYPES: ENABLE
 
 void
-clone(self, depth=-1)
+clone(self, depth_sv=NULL)
 	SV *self
-	int depth
+	SV *depth_sv
 	PREINIT:
 	SV *clone = &PL_sv_undef;
 	HV *hseen;
 	AV *weakrefs;
+	int depth;
 	PPCODE:
+	/* Normalise the optional depth cap.  depth == 0 means "share, don't
+	 * clone" and hands the caller back the original SV, so every value
+	 * that collapses to 0 silently turns clone() into an alias.  This
+	 * parameter used to be a C `int`, which made that trivially easy to
+	 * hit: clone($x, 2**32) truncated to 0 without even a warning, and
+	 * undef or a non-numeric string coerced to 0 the same way.  Only an
+	 * explicit 0 may mean "share" now. */
+	if (!depth_sv || (SvGETMAGIC(depth_sv), !SvOK(depth_sv)))
+	    depth = -1;		/* undef == no cap, same as omitting it */
+	else {
+	    NV nv;
+	    if (!looks_like_number(depth_sv))
+	        croak("Clone::clone: depth must be a number");
+	    /* Range-check through the NV: SvIV() of a NaN or an infinity
+	     * yields 0 on some platforms, which would silently mean "share". */
+	    nv = SvNV_nomg(depth_sv);
+	    if (nv != nv)			/* NaN */
+	        croak("Clone::clone: depth must be a number");
+	    else if (nv < 0)			/* already unlimited */
+	        depth = -1;
+	    else if (nv > (NV)INT_MAX)		/* clamp, never wrap */
+	        depth = INT_MAX;
+	    else
+	        depth = (int)SvIV_nomg(depth_sv);
+	}
 	hseen = newHV();
 	weakrefs = newAV();
 	/* Register for automatic cleanup on scope exit.  If sv_clone()
