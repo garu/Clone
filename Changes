@@ -1,6 +1,8 @@
 Revision history for Perl module Clone
 
 0.52 (unreleased)
+  - fix: clone Perl 5.38+ class instances (SVt_PVOBJ) past MAX_DEPTH
+    instead of croaking or aliasing the original
   - fix: stop using the 5.10 defined-or operator (//) in t/16 and t/17,
     which made both files fail to compile on threaded perl 5.8 (GH #162)
   - test: add t/33-perl58-syntax.t, a static check guarding shipped
