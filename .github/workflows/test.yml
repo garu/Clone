@@ -106,7 +106,7 @@ jobs:
       - name: Install test deps
         run: |
           cpanm --notest --installdeps --cpanfile .github/cpanfile.test --with-develop .
-          cpanm --notest DBD::SQLite DBI Class::DBI Math::BigInt::GMP 2>/dev/null || true
+          cpanm --notest Test::LeakTrace DBD::SQLite DBI Class::DBI Math::BigInt::GMP 2>/dev/null || true
       - run: perl Makefile.PL
       - run: make
       - run: make test
@@ -175,6 +175,17 @@ jobs:
           sudo: false
           global: false
           cpanfile: ".github/cpanfile.test"
+      # Recommended deps are best effort: Math::BigInt::GMP needs libgmp
+      # and DBD::SQLite/Class::DBI are heavy, so a failure here must not
+      # fail the job -- the tests that use them skip on their own.
+      - name: install recommended test deps (best effort)
+        continue-on-error: true
+        uses: perl-actions/install-with-cpm@v2
+        with:
+          sudo: false
+          global: false
+          cpanfile: ".github/cpanfile.test"
+          args: "--with-all"
       - name: Set PERL5LIB to local lib
         run: echo "PERL5LIB=$(pwd)/local/lib/perl5" >> $GITHUB_ENV
       - run: perl Makefile.PL
@@ -207,6 +218,12 @@ jobs:
         run: |
           cpanm --installdeps --cpanfile .github/cpanfile.test --with-develop .
           cpanm -n TAP::Formatter::GitHubActions
+      # Best effort, as on the other jobs: the tests needing these skip
+      # when they are missing, and DBD::SQLite/GMP are the likeliest to
+      # fail to build on Strawberry.
+      - name: Install recommended test deps (best effort)
+        continue-on-error: true
+        run: cpanm -n Test::LeakTrace DBI DBD::SQLite Class::DBI Math::BigInt::GMP
       - name: Build
         run: |
           perl Makefile.PL
