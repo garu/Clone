@@ -41,6 +41,7 @@ t/30-edge-cases.t
 t/31-depth-parameter.t
 t/32-tied-mgobj-leak.t
 t/39-depth-zero-boundary.t
+t/40-no-leaks.t
 t/dclone.t
 t/dump.pl
 t/tied.pl
