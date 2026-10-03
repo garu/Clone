@@ -80,7 +80,7 @@ jobs:
     name: "perl 5.8 syntax guard"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: install PPI
         uses: perl-actions/install-with-cpm@v2
         with:
