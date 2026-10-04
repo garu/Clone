@@ -612,40 +612,20 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
           || mg->mg_type == PERL_MAGIC_shared)
         continue;
 
-      /* Some mg_obj's can be null, don't bother cloning */
-      if ( mg->mg_obj != NULL )
-      {
-        switch (mg->mg_type)
-        {
-          case 'r':	/* PERL_MAGIC_qr  */
-            obj = mg->mg_obj;
-            has_qr = 1;
-            break;
-          case 't':	/* PERL_MAGIC_taint */
-          case '<': /* PERL_MAGIC_backref */
-          case '@':  /* PERL_MAGIC_arylen_p */
-            continue; /* resumes the outer magic iteration loop */
-          case 'P': /* PERL_MAGIC_tied */
-          case 'p': /* PERL_MAGIC_tiedelem */
-          case 'q': /* PERL_MAGIC_tiedscalar */
-            /* threads::shared::tie objects are not real tie objects --
-             * skip them so the clone becomes a plain unshared copy.
-             * The data will be read through the tie during hv_clone/av_clone. */
-            if (is_threads_shared_tie(mg->mg_obj))
-              continue;
-	          magic_ref++;
-	    /* fall through */
-          default:
-            obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
-            obj_cloned = 1;
-        }
-      } else {
-        TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
-      }
-
+      /* Validate (and, for utf8, copy) the mg_ptr *before* cloning the
+       * mg_obj.  None of this depends on the clone, and the
+       * "Unsupported magic_ptr clone" croak below longjmps past every
+       * active frame: were the obj cloned first, its only reference
+       * would be this C local and the whole cloned sub-graph would be
+       * orphaned.  Doing the validation first closes that window
+       * instead of guarding it.
+       *
+       * The utf8 cache allocated here cannot leak through the switch's
+       * `continue` branches: those cover taint, backref, arylen_p and
+       * the threads::shared tie types, never PERL_MAGIC_utf8. */
       { /* clone the mg_ptr pv */
         char *mg_ptr = mg->mg_ptr; /* default */
-        U32 obj_rc = obj_cloned ? SvREFCNT(obj) : 0;
+        U32 obj_rc;
 
         if (mg->mg_len >= 0) {
           /* sv_magic() with non-negative namlen calls savepvn()
@@ -664,6 +644,39 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
         } else if ( mg->mg_ptr != NULL) {
           croak("Unsupported magic_ptr clone");
         }
+
+        /* Some mg_obj's can be null, don't bother cloning */
+        if ( mg->mg_obj != NULL )
+        {
+          switch (mg->mg_type)
+          {
+            case 'r':	/* PERL_MAGIC_qr  */
+              obj = mg->mg_obj;
+              has_qr = 1;
+              break;
+            case 't':	/* PERL_MAGIC_taint */
+            case '<': /* PERL_MAGIC_backref */
+            case '@':  /* PERL_MAGIC_arylen_p */
+              continue; /* resumes the outer magic iteration loop */
+            case 'P': /* PERL_MAGIC_tied */
+            case 'p': /* PERL_MAGIC_tiedelem */
+            case 'q': /* PERL_MAGIC_tiedscalar */
+              /* threads::shared::tie objects are not real tie objects --
+               * skip them so the clone becomes a plain unshared copy.
+               * The data will be read through the tie during hv_clone/av_clone. */
+              if (is_threads_shared_tie(mg->mg_obj))
+                continue;
+              magic_ref++;
+              /* fall through */
+            default:
+              obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
+              obj_cloned = 1;
+          }
+        } else {
+          TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
+        }
+
+        obj_rc = obj_cloned ? SvREFCNT(obj) : 0;
 
         sv_magic(clone,
                  obj,

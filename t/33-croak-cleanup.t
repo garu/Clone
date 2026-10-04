@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 8;
+use Test::More tests => 10;
 use Clone qw(clone);
 
 # Partial clone graph must not leak when cloning croaks half-way.
@@ -144,4 +144,42 @@ CLASS
 
     is($Tracker::destroyed, 1,
        'class instance: cloned field freed during unwinding');
+}
+
+# 9-10: the same past MAX_DEPTH, but with the crossing landing on a
+#    container instead of a reference, so the root is owned by
+#    clone_container_iterative rather than rv_clone_iterative.
+#
+#    sv_clone() spends one rdepth per call, so in [$tracker, $deep] the
+#    array at level n is reached at even rdepth and the reference to it
+#    at odd rdepth: test 6's shape always crosses MAX_DEPTH on an odd
+#    (reference) step.  Prepending one scalar ref shifts every level by
+#    one and flips the crossing onto the array.  Both depths are swept
+#    so the parity holds regardless of where exactly the limit falls.
+{
+    my $is_limited = ($^O eq 'MSWin32' || $^O eq 'cygwin');
+    my $base       = $is_limited ? 1200 : 2200;
+
+    for my $extra (0, 1) {
+        my $depth = $base + $extra;
+
+        my @keep;
+        my $deep = \$boom;
+        for my $i (1 .. $depth) {
+            my $tracker = Tracker->new($i);
+            push @keep, $tracker;		# keep the originals alive
+            $deep = [ $tracker, $deep ];
+        }
+        my $outer = \$deep;		# shifts the MAX_DEPTH crossing
+
+        $Tracker::destroyed = 0;
+        eval {
+            local $SIG{__WARN__} = sub { };
+            clone($outer);
+        };
+
+        is($Tracker::destroyed, $depth,
+           "deep structure (depth $depth, shifted parity): "
+           . "all $depth cloned objects freed during unwinding");
+    }
 }
