@@ -137,10 +137,11 @@ hv_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
  * ------------------------------------------------------------------- */
 
 /* Registered with SAVEDESTRUCTOR_X so the queue is released both on the
- * normal path (at LEAVE) and when cloning croaks — a dying __WARN__
- * handler on the depth-limit warning, or a tied FETCH, longjmps straight
- * past any explicit Safefree.  The queue itself lives on the heap because
- * the savestack is unwound after our C frame is already gone. */
+ * normal path (at LEAVE) and when cloning croaks — a
+ * dying __WARN__ handler on the depth-limit warning, or a tied FETCH,
+ * longjmps straight past any explicit Safefree.  The queue itself lives
+ * on the heap because the savestack is unwound after our C frame is
+ * already gone. */
 static void
 clone_queue_free(pTHX_ void *p)
 {
@@ -238,7 +239,7 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
  * queue (clone_drain) -- and the mechanics are not trivial: UTF-8 keys
  * need a negated klen for hv_store, HeHASH is reused to avoid a mortal SV
  * per key, and array slots are written straight through AvARRAY with the
- * fill mark set afterwards.  Keeping two copies of that let the paths
+ * fill mark claimed up-front.  Keeping two copies of that let the paths
  * drift, so both now call these.
  *
  * The only per-path difference is how one element is cloned, and that is
@@ -276,6 +277,13 @@ av_store_cloned(AV *src, AV *dst, HV *hseen, int depth, int rdepth,
 
     av_extend(dst, arrlen);
 
+    /* Claim the slots before filling them, not after: av_extend NULLs
+     * them, and free-time only walks up to AvFILLp.  Were the fill mark
+     * set afterwards, a croak mid-loop (a tied FETCH, a dying __WARN__
+     * handler) would leave every element cloned so far above the mark,
+     * unreachable and unfreeable. */
+    AvFILLp(dst) = arrlen;
+
     /* Fetch from the source (which may be magical) but write straight
      * into the target's AvARRAY: we just created it, so it has no magic.
      * Slots av_extend zeroed are left alone, preserving the source's
@@ -287,7 +295,6 @@ av_store_cloned(AV *src, AV *dst, HV *hseen, int depth, int rdepth,
             slot[i] = q ? clone_elem(*svp, hseen, rdepth, weakrefs, q)
                         : sv_clone(*svp, hseen, recur, rdepth, weakrefs);
     }
-    AvFILLp(dst) = arrlen;
 }
 
 static void
@@ -358,8 +365,20 @@ clone_container_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
     root_clone = clone_shell(ref, hseen, q);
+    /* Hand the root to the savestack for the duration of the drain, for
+     * the reason spelled out in sv_clone(): a croak while draining
+     * discards this frame's reference, and hseen releasing its own would
+     * still leave the root -- and the whole sub-graph below it -- alive
+     * and unreachable.
+     *
+     * The caller's reference is taken *before* LEAVE, so the local scope
+     * can stay: on the normal path LEAVE drops only the savestack's
+     * reference (and frees the queue, as before), while a croak during
+     * the drain unwinds this very scope and frees the root. */
+    SAVEFREESV(root_clone);
     clone_drain(q, hseen, rdepth, weakrefs);
 
+    SvREFCNT_inc_simple_NN(root_clone);
     LEAVE;
     return root_clone;
 }
@@ -531,8 +550,12 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
     SAVEDESTRUCTOR_X(clone_queue_free, q);
 
     result = rv_clone_chain(ref, hseen, rdepth, weakrefs, q);
+    /* Same ownership transfer as clone_container_iterative(). */
+    if (result)
+        SAVEFREESV(result);
     clone_drain(q, hseen, rdepth, weakrefs);
 
+    SvREFCNT_inc(result);
     LEAVE;
     return result;
 }
@@ -589,40 +612,20 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
           || mg->mg_type == PERL_MAGIC_shared)
         continue;
 
-      /* Some mg_obj's can be null, don't bother cloning */
-      if ( mg->mg_obj != NULL )
-      {
-        switch (mg->mg_type)
-        {
-          case 'r':	/* PERL_MAGIC_qr  */
-            obj = mg->mg_obj;
-            has_qr = 1;
-            break;
-          case 't':	/* PERL_MAGIC_taint */
-          case '<': /* PERL_MAGIC_backref */
-          case '@':  /* PERL_MAGIC_arylen_p */
-            continue; /* resumes the outer magic iteration loop */
-          case 'P': /* PERL_MAGIC_tied */
-          case 'p': /* PERL_MAGIC_tiedelem */
-          case 'q': /* PERL_MAGIC_tiedscalar */
-            /* threads::shared::tie objects are not real tie objects --
-             * skip them so the clone becomes a plain unshared copy.
-             * The data will be read through the tie during hv_clone/av_clone. */
-            if (is_threads_shared_tie(mg->mg_obj))
-              continue;
-	          magic_ref++;
-	    /* fall through */
-          default:
-            obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
-            obj_cloned = 1;
-        }
-      } else {
-        TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
-      }
-
+      /* Validate (and, for utf8, copy) the mg_ptr *before* cloning the
+       * mg_obj.  None of this depends on the clone, and the
+       * "Unsupported magic_ptr clone" croak below longjmps past every
+       * active frame: were the obj cloned first, its only reference
+       * would be this C local and the whole cloned sub-graph would be
+       * orphaned.  Doing the validation first closes that window
+       * instead of guarding it.
+       *
+       * The utf8 cache allocated here cannot leak through the switch's
+       * `continue` branches: those cover taint, backref, arylen_p and
+       * the threads::shared tie types, never PERL_MAGIC_utf8. */
       { /* clone the mg_ptr pv */
         char *mg_ptr = mg->mg_ptr; /* default */
-        U32 obj_rc = obj_cloned ? SvREFCNT(obj) : 0;
+        U32 obj_rc;
 
         if (mg->mg_len >= 0) {
           /* sv_magic() with non-negative namlen calls savepvn()
@@ -641,6 +644,39 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
         } else if ( mg->mg_ptr != NULL) {
           croak("Unsupported magic_ptr clone");
         }
+
+        /* Some mg_obj's can be null, don't bother cloning */
+        if ( mg->mg_obj != NULL )
+        {
+          switch (mg->mg_type)
+          {
+            case 'r':	/* PERL_MAGIC_qr  */
+              obj = mg->mg_obj;
+              has_qr = 1;
+              break;
+            case 't':	/* PERL_MAGIC_taint */
+            case '<': /* PERL_MAGIC_backref */
+            case '@':  /* PERL_MAGIC_arylen_p */
+              continue; /* resumes the outer magic iteration loop */
+            case 'P': /* PERL_MAGIC_tied */
+            case 'p': /* PERL_MAGIC_tiedelem */
+            case 'q': /* PERL_MAGIC_tiedscalar */
+              /* threads::shared::tie objects are not real tie objects --
+               * skip them so the clone becomes a plain unshared copy.
+               * The data will be read through the tie during hv_clone/av_clone. */
+              if (is_threads_shared_tie(mg->mg_obj))
+                continue;
+              magic_ref++;
+              /* fall through */
+            default:
+              obj = sv_clone(mg->mg_obj, hseen, -1, rdepth, weakrefs);
+              obj_cloned = 1;
+          }
+        } else {
+          TRACEME(("magic object for type %c in NULL\n", mg->mg_type));
+        }
+
+        obj_rc = obj_cloned ? SvREFCNT(obj) : 0;
 
         sv_magic(clone,
                  obj,
@@ -684,7 +720,9 @@ av_clone (SV * ref, SV * target, HV* hseen, int depth, int rdepth, AV * weakrefs
 
     TRACEME(("ref = 0x%" UVxf "(%d)\n", PTR2UV(ref), SvREFCNT(ref)));
 
-    /* NULL queue: clone each element recursively (see av_store_cloned). */
+    /* NULL queue: clone each element recursively (see av_store_cloned).
+     * The fill mark is claimed there before the slots are filled, so a
+     * croak mid-loop cannot orphan the elements cloned so far. */
     av_store_cloned(self, clone, hseen, depth, rdepth, weakrefs, NULL);
 
     TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
@@ -957,6 +995,37 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
      * chocolateboy: 2001-05-29
      */
 
+  /* A plain, non-magical scalar leaf is already finished: none of the
+   * work below applies to it (no magic to clone, no elements, no
+   * referent), so hand our reference straight back.  SvTYPE >= SVt_PVAV
+   * means AV, HV or (5.38+) PVOBJ here -- the share-only CV/GV/FM/IO
+   * types returned at `ref == clone` just above. */
+  if (!SvMAGICAL(ref) && !SvROK(ref) && SvTYPE(ref) < SVt_PVAV)
+      return clone;
+
+  /* Everything past this point recurses, and a croak down there -- a
+   * tied FETCH, a dying __WARN__ handler on the depth-limit warning, an
+   * unclonable type -- longjmps out of every active sv_clone() frame at
+   * once.  A reference held only in a C local is simply lost when that
+   * happens: the clone, and the whole sub-graph already built beneath
+   * it, leak.  hseen does not help, even for the clones it holds: its
+   * reference is its own, and releasing it still leaves this frame's
+   * orphaned one behind.
+   *
+   * So give the reference away.  The savestack owns the clone while the
+   * sub-graph is built, and the caller gets a fresh reference at the
+   * bottom of this function -- a reference that a longjmp from in
+   * between never creates, leaving the savestack as the sole owner, to
+   * free during unwinding.
+   *
+   * The registration gets a scope of its own so the savestack cost stays
+   * O(nesting depth) rather than O(graph size): this frame's entry is
+   * released at LEAVE, as soon as its sub-graph is complete and the
+   * caller's reference (taken just before) exists.  A croak anywhere in
+   * between unwinds this scope along with every enclosing one. */
+  ENTER;
+  SAVEFREESV(clone);
+
     /* 1: TIED / MAGIC */
   if (SvMAGICAL(ref))
       magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs);
@@ -982,24 +1051,42 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
             int recur = depth > 0 ? depth - 1 : -1;
             SSize_t fi;
 
-            Newx(dst_fields, maxfield + 1, SV *);
+            /* Attach the (zeroed) field array to the clone before
+             * filling it, so the clone owns every field already cloned
+             * if sv_clone() croaks part-way: free-time walks the fields
+             * up to ObjectMAXFIELD and tolerates NULL slots.  Filling
+             * first and attaching afterwards would orphan both the
+             * buffer and its contents. */
+            Newxz(dst_fields, maxfield + 1, SV *);
+            ObjectFIELDS(clone) = dst_fields;
+            ObjectMAXFIELD(clone) = maxfield;
             for (fi = 0; fi <= maxfield; fi++)
               {
                 dst_fields[fi] = src_fields[fi]
                   ? sv_clone(src_fields[fi], hseen, recur, rdepth, weakrefs)
                   : newSV(0);
               }
-            ObjectFIELDS(clone) = dst_fields;
-            ObjectMAXFIELD(clone) = maxfield;
           }
       }
 #endif /* PERL_VERSION >= 38 */
     /* 3: REFERENCE (inlined for speed) */
     else if (SvROK (ref))
       {
+        /* newSVsv() left `clone` pointing at the *source's* referent,
+         * with a reference of its own.  Release that reference before
+         * recursing -- holding it would inflate the referent's refcount
+         * and make sv_clone() below treat an unshared referent as
+         * visible -- but empty the slot as well.  The clone belongs to
+         * the savestack now, and freeing a still-ROK clone while
+         * unwinding from a croak inside the recursion would decrement
+         * the source's referent a second time. */
+        SV *old_referent = SvRV(clone);
         TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
-        SvREFCNT_dec(SvRV(clone));
-        SvRV(clone) = sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs); /* Clone the referent */
+        SvROK_off(clone);
+        SvRV_set(clone, NULL);
+        SvREFCNT_dec(old_referent);
+        SvRV_set(clone, sv_clone (SvRV(ref), hseen, depth, rdepth, weakrefs)); /* Clone the referent */
+        SvROK_on(clone);
         if (SvOBJECT(SvRV(ref)))
         {
 #if PERL_VERSION >= 38
@@ -1031,6 +1118,12 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
   }
 
   TRACEME(("clone = 0x%" UVxf "(%d)\n", PTR2UV(clone), SvREFCNT(clone)));
+  /* The savestack owns the reference this frame created; hand the caller
+   * one of its own, then close the scope that held ours.  Reaching here
+   * means nothing croaked, and the caller stores the clone into its
+   * parent container without running any perl code in between. */
+  SvREFCNT_inc_simple_NN(clone);
+  LEAVE;
   return clone;
 }
 
@@ -1047,6 +1140,14 @@ clone(self, depth=-1)
 	HV *hseen;
 	AV *weakrefs;
 	PPCODE:
+	/* Open an explicit scope so everything handed to the savestack
+	 * while cloning — hseen, weakrefs, and the references sv_clone()
+	 * registers for the clones it has in flight — is released when
+	 * this call returns, instead of lingering until the caller's
+	 * block exits.  A croak part-way through unwinds the very same
+	 * scope and frees the very same set, which is what keeps a
+	 * half-built clone graph from leaking. */
+	ENTER;
 	hseen = newHV();
 	weakrefs = newAV();
 	/* Register for automatic cleanup on scope exit.  If sv_clone()
@@ -1070,6 +1171,14 @@ clone(self, depth=-1)
 	        }
 	    }
 	}
-	/* hseen and weakrefs are freed automatically via SAVEFREESV */
+	/* Frees hseen and weakrefs (and, on a croak, whatever clone
+	 * references were still in flight).  `clone` keeps the reference
+	 * sv_clone() returned, and the rest of the graph hangs off it. */
+	LEAVE;
+	/* Cloning can run perl code (a tied FETCH, a DESTROY), and that
+	 * may have reallocated the argument stack, leaving the SP cached
+	 * on entry pointing into freed memory.  ax is an index, so it
+	 * still locates the mark SP has to be restored to. */
+	SP = PL_stack_base + ax - 1;
 	EXTEND(SP,1);
 	PUSHs(sv_2mortal(clone));

@@ -13,7 +13,7 @@ BEGIN {
     }
 }
 
-plan tests => 16;
+plan tests => 17;
 
 # GH #15 - Weakened refs always clone as undef
 # When cloning a structure with weakened references, Clone should
@@ -114,4 +114,21 @@ plan tests => 16;
 
     my $c = clone($a);
     ok(defined $c->{r}, 'circular weak reference survives cloning');
+}
+
+# Test 6: a referent held only by the seen-hash is gone by the time
+# clone() returns, so the weak slot reads undef -- the same answer as
+# Test 4, and independent of the caller's block structure.  The alias
+# makes the target "visible" (refcount > 1), which is what puts its
+# clone in the seen-hash; nothing in the clone graph holds it strongly.
+{
+    my $target = { v => 1 };
+    my $alias  = $target;		# refcount 2 -> recorded in hseen
+    my $h = { w => $target };
+    weaken($h->{w});
+
+    my $c = clone($h);
+
+    ok(!defined $c->{w},
+       'weak ref to a seen-hash-only referent is undef when clone() returns');
 }
