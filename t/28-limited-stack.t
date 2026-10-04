@@ -32,7 +32,7 @@ BEGIN {
         or plan skip_all => 'threads not loadable';
 }
 
-plan tests => 13;
+plan tests => 15;
 
 use Clone qw(clone);
 
@@ -289,6 +289,50 @@ sub in_thread {
     is($tied_ok, 1, 'every level of the deep tied scalar chain is still tied');
 }
 
+# --- Deep chain of tied scalars whose tie object is a *scalar* ref ---
+# Deep::TieScalar above is a blessed hash, so its mg_obj reaches the work
+# queue through clone_shell and stays flat.  `bless \$next` -- the other
+# ordinary TIESCALAR idiom -- references a plain scalar instead, so its
+# mg_obj goes through rv_clone_chain.  Cloning a leaf's magic inline then
+# made that walk re-enter itself once per level: a block of C frames per
+# level, which overflows this stack, on top of corrupting the shared chain
+# scratch buffer (see t/33-deep-magic.t for the visible damage).
+{
+    my $TIED_DEPTH = 5_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my $x;
+            tie $x, 'Deep::TieScalarRef', $prev;
+            push @keep, \$x;       # keep every level alive
+            $prev = \$x;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $obj      = tied ${$cloned};
+        my $tied_ok  = defined $obj ? 1 : 0;
+        # The slot must hold a plain reference to the cloned tied scalar,
+        # not the cloned tie object itself.
+        $tied_ok = 0 if ref($cloned) ne 'SCALAR' && ref($cloned) ne 'REF';
+        while ( $obj && ref ${$obj} ) {
+            my $next = ${$obj};
+            $obj = tied ${$next};
+            $measured++;
+            $tied_ok = 0 unless defined $obj;
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep scalar-ref tie chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the scalar-ref tie chain is still tied');
+}
+
 {
     package Deep::Tie;
     sub TIEHASH  { bless {}, shift }
@@ -301,6 +345,13 @@ sub in_thread {
 {
     package Deep::TieScalar;
     sub TIESCALAR { my ($class, $state) = @_; bless $state, $class }
+    sub FETCH     { 'v' }
+    sub STORE     { }
+}
+
+{
+    package Deep::TieScalarRef;
+    sub TIESCALAR { my ($class, $next) = @_; bless \$next, $class }
     sub FETCH     { 'v' }
     sub STORE     { }
 }

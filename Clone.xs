@@ -52,11 +52,16 @@ do {									\
 
 #define CLONE_FETCH(x) (hv_fetch(hseen, CLONE_KEY(x), PTRSIZE, 0))
 
-/* Work item for the iterative (past-MAX_DEPTH) cloner: a source
- * container paired with its already-allocated clone shell. */
+/* Work item kinds for the iterative (past-MAX_DEPTH) cloner. */
+#define CLONE_TASK_CONTAINER 0	/* fill an empty AV/HV clone shell     */
+#define CLONE_TASK_MAGIC     1	/* clone magic onto a scalar leaf copy  */
+
+/* Work item for the iterative (past-MAX_DEPTH) cloner: a source SV paired
+ * with its already-allocated clone. */
 typedef struct {
-    SV *src;	/* source AV or HV                                */
-    SV *dst;	/* its clone, already registered in hseen, empty  */
+    SV *src;	/* source container (CONTAINER) or scalar (MAGIC)     */
+    SV *dst;	/* its clone, already registered in hseen, unfinished */
+    int kind;	/* CLONE_TASK_*                                       */
 } clone_task;
 
 typedef struct {
@@ -65,8 +70,16 @@ typedef struct {
     I32 max;
     /* Scratch buffer rv_clone_chain walks RV chains into.  It lives here
      * so it is allocated once per clone rather than once per element, and
-     * so it is covered by the queue's croak-safe cleanup.  rv_clone_chain
-     * never re-enters itself, so a single shared buffer is safe. */
+     * so it is covered by the queue's croak-safe cleanup.
+     *
+     * A single shared buffer is only safe because rv_clone_chain never
+     * re-enters itself, and that holds only because magic is deferred: its
+     * leaf goes through sv_clone_q, whose magic cloning would otherwise
+     * reach clone_magic -> clone_elem -> rv_clone_chain for an mg_obj
+     * referencing a non-container (the ordinary `bless \$v` tie object).
+     * sv_clone_q pushes a CLONE_TASK_MAGIC item instead, so clone_magic
+     * only ever runs from clone_drain, with no chain walk in progress.
+     * Do not clone magic inline on the iterative path. */
     SV **chain;
     I32 chain_max;
 } clone_queue;
@@ -158,7 +171,7 @@ clone_queue_free(pTHX_ void *p)
 }
 
 static void
-clone_queue_push(clone_queue *q, SV *src, SV *dst)
+clone_queue_push(clone_queue *q, SV *src, SV *dst, int kind)
 {
     if (q->len >= q->max) {
         q->max = q->max ? q->max * 2 : 64;
@@ -174,6 +187,7 @@ clone_queue_push(clone_queue *q, SV *src, SV *dst)
      * hseen holds one.  clone_queue_free releases these. */
     q->items[q->len].src = SvREFCNT_inc_simple_NN(src);
     q->items[q->len].dst = dst;
+    q->items[q->len].kind = kind;
     q->len++;
 }
 
@@ -192,7 +206,7 @@ clone_shell(SV *ref, HV *hseen, clone_queue *q)
 
     clone = (SvTYPE(ref) == SVt_PVHV) ? (SV *) newHV() : (SV *) newAV();
     CLONE_STORE(ref, clone);
-    clone_queue_push(q, ref, clone);
+    clone_queue_push(q, ref, clone, CLONE_TASK_CONTAINER);
 
     return clone;
 }
@@ -229,8 +243,8 @@ clone_elem(SV *e, HV *hseen, int rdepth, AV *weakrefs, clone_queue *q)
     /* Plain scalar leaf.  rdepth is above MAX_DEPTH here, so sv_clone
      * takes its non-recursive branch (a copy, or sharing for types that
      * cannot be copied at all).  q is passed on so that magic hanging off
-     * the leaf -- a tie object holding the next container, say -- joins
-     * this queue instead of starting a nested drain. */
+     * the leaf -- a tie object holding the next level, say -- is deferred
+     * onto this queue instead of being cloned inline. */
 
     /* A non-clonable value sitting *directly* in a container past the
      * limit is the one case the limit itself makes visible, so warn here.
@@ -362,6 +376,19 @@ clone_drain(clone_queue *q, HV *hseen, int rdepth, AV *weakrefs)
     for (i = 0; i < q->len; i++) {
         SV *src = q->items[i].src;
         SV *dst = q->items[i].dst;
+
+        /* A magical scalar leaf deferred by sv_clone_q: its clone already
+         * holds the copied value, only the magic is outstanding.  Running
+         * clone_magic from here rather than inline is what keeps
+         * rv_clone_chain non-re-entrant (see clone_queue.chain) and the C
+         * stack flat -- a tie object that is a reference to a plain scalar
+         * (`bless \$v`) would otherwise start another chain walk from
+         * inside the one that produced this leaf.  The return value is
+         * irrelevant: a scalar has no elements to skip iterating. */
+        if (q->items[i].kind == CLONE_TASK_MAGIC) {
+            clone_magic(src, dst, hseen, rdepth, weakrefs, q);
+            continue;
+        }
 
         /* Same ordering as sv_clone: magic first, and a container whose
          * elements belong to its tie magic is not iterated at all -- the
@@ -507,7 +534,8 @@ rv_clone_chain(SV * ref, HV* hseen, int rdepth, AV * weakrefs, clone_queue *q)
              * place.  Sharing is silent here, as it is at any depth: a
              * leaf behind a reference clones no differently past the
              * limit than below it.  q travels with it so magic on the
-             * leaf queues rather than nesting a drain. */
+             * leaf is deferred onto the queue -- cloning it here would
+             * re-enter this very function and clobber chain[]. */
             leaf_clone = sv_clone_q(current, hseen, -1, rdepth, weakrefs, q);
         }
     }
@@ -573,9 +601,14 @@ rv_clone_iterative(SV * ref, HV* hseen, int rdepth, AV * weakrefs)
  * containers are managed entirely by their tie magic).
  *
  * q is the iterative cloner's work queue, or NULL on the recursive path.
- * When set, an mg_obj pointing at a container joins that queue instead of
- * being cloned through sv_clone: a chain of nested tied containers then
- * costs a queue entry per level rather than a C stack frame per level. */
+ * When set, the mg_obj is cloned through clone_elem rather than sv_clone,
+ * so a container it holds joins that queue: a chain of nested tied
+ * containers costs a queue entry per level, not a C stack frame per level.
+ *
+ * With a queue, this must only be called from clone_drain.  clone_elem can
+ * reach rv_clone_chain (an mg_obj referencing a plain scalar, i.e. the
+ * usual `bless \$v` tie object), and that walk has a single scratch buffer
+ * per queue -- see clone_queue.chain. */
 static int
 clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs,
             clone_queue *q)
@@ -736,9 +769,10 @@ sv_clone (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs)
     return sv_clone_q(ref, hseen, depth, rdepth, weakrefs, NULL);
 }
 
-/* q is the iterative cloner's work queue, or NULL on the recursive path;
- * it is handed to clone_magic so that a tie object reached from a scalar
- * leaf joins the caller's queue instead of starting a nested drain. */
+/* q is the iterative cloner's work queue, or NULL on the recursive path.
+ * When set, magic on the scalar leaf being cloned is pushed onto that
+ * queue as a CLONE_TASK_MAGIC item rather than cloned here, so neither the
+ * C stack nor rv_clone_chain's scratch buffer is re-entered per level. */
 static SV *
 sv_clone_q (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs,
             clone_queue *q)
@@ -790,9 +824,10 @@ sv_clone_q (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs,
          * what keeps iteratively-cloned containers from aliasing their
          * leaves, GH #113; the common path still does that.)
          *
-         * Magic cloning stays flat too: clone_magic gets this call's q,
-         * so a tie object holding a container is pushed onto the caller's
-         * work queue rather than starting a nested drain. */
+         * Magic cloning stays flat too: with a queue in hand this call
+         * defers the leaf's magic onto it (CLONE_TASK_MAGIC) instead of
+         * cloning it inline, so a chain whose tie objects hold the next
+         * level costs a queue entry per level, not a block of C frames. */
         switch (SvTYPE(ref)) {
             case SVt_NULL:
             case SVt_IV:
@@ -1012,7 +1047,22 @@ sv_clone_q (SV * ref, HV* hseen, int depth, int rdepth, AV * weakrefs,
 
     /* 1: TIED / MAGIC */
   if (SvMAGICAL(ref))
-      magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs, q);
+  {
+    if (q)
+      /* Iterative path.  ref is necessarily a plain scalar leaf here --
+       * containers and references were handed to the iterative entry
+       * points above -- so nothing below reads magic_ref, and the magic
+       * can be deferred to the work queue.  It must be: cloning it inline
+       * reaches clone_magic -> clone_elem -> rv_clone_chain whenever an
+       * mg_obj references a non-container, which both re-enters the
+       * chain walk that produced this leaf (clobbering its shared scratch
+       * buffer) and spends a block of C stack per nesting level.  clone
+       * needs no extra reference: SvMAGICAL(ref) made `visible` true, so
+       * the CLONE_STORE above left one in hseen. */
+      clone_queue_push(q, ref, clone, CLONE_TASK_MAGIC);
+    else
+      magic_ref = clone_magic(ref, clone, hseen, rdepth, weakrefs, NULL);
+  }
 
     /* 2: HASH/ARRAY  - (with 'internal' elements) */
     /* For tied HV/AV (magic_ref > 0): skip direct element iteration;

@@ -135,6 +135,46 @@ sub descend {
 
     ${ $leaf->{s} } = 'mutated';
     is( $ts, 'tied-scalar', 'original tied scalar unaffected by clone write' );
+
+    # KoanTieScalar's object is `bless \$v` -- a reference to a plain
+    # scalar, not to a container.  Cloning that mg_obj inline re-entered
+    # the RV-chain walk that was busy cloning \$ts and overwrote its
+    # chain[] entries, so the slot came back holding the cloned *tie
+    # object* (blessed, and pointing at its own tied scalar) instead of a
+    # reference to the cloned tied scalar.  Reads still answered
+    # 'tied-scalar' only because perl disables magic while FETCH runs.
+    is( ref( $leaf->{s} ), 'SCALAR',
+        'deep slot holds a plain scalar ref, not the cloned tie object' );
+    isnt( refaddr( tied ${ $leaf->{s} } ), refaddr( $leaf->{s} ),
+        'cloned tie object is not the slot value itself' );
+    isnt( refaddr( tied ${ $leaf->{s} } ), refaddr( tied $ts ),
+        'scalar tie object was cloned, not shared' );
+}
+
+# --- One reference to a tied scalar in two slots past MAX_DEPTH ---
+# rv_clone_chain registers a placeholder in hseen for every link it walks
+# and retargets it during the rebuild.  When the leaf's magic re-entered
+# that walk, the rebuild retargeted the *inner* walk's placeholder instead,
+# leaving the one registered for the reference itself untouched -- so a
+# second slot holding the same reference resolved to the wrong SV.
+{
+    tie my $ts, 'KoanTieScalar';
+    $ts = 'shared-tied';
+    my $r = \$ts;
+
+    my $cloned = do {
+        local $SIG{__WARN__} = sub { };
+        clone( wrap( { a => $r, b => $r } ) );
+    };
+    my $leaf = descend($cloned);
+
+    is( ref( $leaf->{a} ), 'SCALAR', 'shared slot is a plain scalar ref' );
+    is( refaddr( $leaf->{a} ), refaddr( $leaf->{b} ),
+        'both slots share one clone of the reference' );
+    isa_ok( tied( ${ $leaf->{b} } ), 'KoanTieScalar',
+        'shared deep tied scalar keeps its tie' );
+    is( ${ $leaf->{b} }, 'shared-tied',
+        'value readable through the second slot' );
 }
 
 # --- Scalar magic (PERL_MAGIC_utf8) past MAX_DEPTH ---
