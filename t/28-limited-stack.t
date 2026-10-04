@@ -32,7 +32,7 @@ BEGIN {
         or plan skip_all => 'threads not loadable';
 }
 
-plan tests => 9;
+plan tests => 15;
 
 use Clone qw(clone);
 
@@ -204,4 +204,154 @@ sub in_thread {
     is($measured, $DEPTH,
        "$DEPTH-deep blessed hash chain clones to full depth");
     is($blessed_ok, 1, 'blessings survive the deep hash clone');
+}
+
+# --- Deep chain of tied hashes --------------------------------------
+# Each level's nested hash lives inside its tie object, so cloning the
+# tie magic (clone_magic) is the only way to reach the next level.  If
+# the iterative drain cloned mg_obj through sv_clone instead of handing
+# it to its own work queue, this cost one nested drain -- several C stack
+# frames -- per level, and blew this stack long before the last level.
+#
+# Shallower than $DEPTH: perl itself needs a frame per level to build and
+# free a chain of tied hashes this deep, which would mask the regression
+# under test.
+{
+    my $TIED_DEPTH = 10_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my %h;
+            tie %h, 'Deep::Tie';
+            $h{next} = $prev;
+            push @keep, \%h;       # keep every level alive
+            $prev = \%h;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $tied_ok  = defined tied(%$cloned) ? 1 : 0;
+        my $walk     = $cloned;
+        while (ref($walk) && ref($walk->{next})) {
+            $walk = $walk->{next};
+            $measured++;
+            $tied_ok = 0 unless defined tied(%$walk);
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep tied hash chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the deep tied chain is still tied');
+}
+
+# --- Deep chain of tied *scalars* -----------------------------------
+# Same shape as above but through scalar leaves: each tie object holds a
+# reference to the next tied scalar, so the chain is only reachable via
+# clone_magic.  A scalar leaf is cloned by sv_clone, not clone_drain; if
+# sv_clone clones its magic with a NULL queue, every level re-enters
+# rv_clone_iterative and nests a fresh drain -- a block of C frames per
+# level -- which overflows this stack well before the last level.
+{
+    my $TIED_DEPTH = 5_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my $x;
+            tie $x, 'Deep::TieScalar', { next => $prev };
+            push @keep, \$x;       # keep every level alive
+            $prev = \$x;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $obj      = tied ${$cloned};
+        my $tied_ok  = defined $obj ? 1 : 0;
+        while ( $obj && ref $obj->{next} ) {
+            my $next = $obj->{next};
+            $obj = tied ${$next};
+            $measured++;
+            $tied_ok = 0 unless defined $obj;
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep tied scalar chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the deep tied scalar chain is still tied');
+}
+
+# --- Deep chain of tied scalars whose tie object is a *scalar* ref ---
+# Deep::TieScalar above is a blessed hash, so its mg_obj reaches the work
+# queue through clone_shell and stays flat.  `bless \$next` -- the other
+# ordinary TIESCALAR idiom -- references a plain scalar instead, so its
+# mg_obj goes through rv_clone_chain.  Cloning a leaf's magic inline then
+# made that walk re-enter itself once per level: a block of C frames per
+# level, which overflows this stack, on top of corrupting the shared chain
+# scratch buffer (see t/33-deep-magic.t for the visible damage).
+{
+    my $TIED_DEPTH = 5_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my $x;
+            tie $x, 'Deep::TieScalarRef', $prev;
+            push @keep, \$x;       # keep every level alive
+            $prev = \$x;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $obj      = tied ${$cloned};
+        my $tied_ok  = defined $obj ? 1 : 0;
+        # The slot must hold a plain reference to the cloned tied scalar,
+        # not the cloned tie object itself.
+        $tied_ok = 0 if ref($cloned) ne 'SCALAR' && ref($cloned) ne 'REF';
+        while ( $obj && ref ${$obj} ) {
+            my $next = ${$obj};
+            $obj = tied ${$next};
+            $measured++;
+            $tied_ok = 0 unless defined $obj;
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep scalar-ref tie chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the scalar-ref tie chain is still tied');
+}
+
+{
+    package Deep::Tie;
+    sub TIEHASH  { bless {}, shift }
+    sub FETCH    { $_[0]->{ $_[1] } }
+    sub STORE    { $_[0]->{ $_[1] } = $_[2] }
+    sub FIRSTKEY { my $s = shift; scalar keys %$s; each %$s }
+    sub NEXTKEY  { each %{ $_[0] } }
+}
+
+{
+    package Deep::TieScalar;
+    sub TIESCALAR { my ($class, $state) = @_; bless $state, $class }
+    sub FETCH     { 'v' }
+    sub STORE     { }
+}
+
+{
+    package Deep::TieScalarRef;
+    sub TIESCALAR { my ($class, $next) = @_; bless \$next, $class }
+    sub FETCH     { 'v' }
+    sub STORE     { }
 }

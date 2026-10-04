@@ -41,7 +41,9 @@ t/29-depth-zero-boundary.t
 t/30-edge-cases.t
 t/31-depth-parameter.t
 t/32-tied-mgobj-leak.t
+t/33-deep-magic.t
 t/33-perl58-syntax.t
+t/34-deep-shared.t
 t/34-element-store-parity.t
 t/dclone.t
 t/dump.pl

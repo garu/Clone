@@ -139,11 +139,17 @@ nested scalar references). The fallback drives nested containers
 through a heap-allocated work queue, so its C stack usage does not
 grow with nesting depth whatever the shape of the data.
 
+Magic is cloned in the fallback too: tied containers and tied
+scalars stay tied, copy-on-write buffers stay shared with the
+source, other scalar magic is carried over, and C<threads::shared>
+data still comes out as a plain unshared copy — the same results
+the recursive path gives you below the limit.
+
 Non-clonable types (globs, code references, formats, IO handles)
 are always shared regardless of depth. Encountering one directly as
-a container element past the depth limit also emits a warning (one
-reached through a reference is shared silently, as at any depth).
-To silence it:
+a container element past the depth limit also emits a warning, once
+per occurrence (one reached through a reference is shared silently,
+as at any depth). To silence it:
 
     $Clone::WARN = 0;
 
