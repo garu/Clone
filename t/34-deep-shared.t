@@ -67,7 +67,19 @@ sub descend {
 my @warnings;
 my $shared_hash   = shared_clone( { k => 'shared-value' } );
 my $shared_array  = shared_clone( [ 'shared-elem', 'second' ] );
-my $shared_scalar = shared_clone('shared-scalar');
+
+# shared_clone() only shares *referenced* data: handed a plain string it
+# returns it unchanged, which would leave the scalar assertions below
+# vacuous.  share() the variable itself so the leaf really carries
+# shared_scalar magic ('n'/'N').
+my $shared_scalar;
+threads::shared::share($shared_scalar);
+$shared_scalar = 'shared-scalar';
+
+# Positive control: without it the "not shared" assertions below would
+# pass on a source that was never shared in the first place.
+ok( defined threads::shared::is_shared($shared_scalar),
+    'source scalar really is shared' );
 
 my $cloned = do {
     local $SIG{__WARN__} = sub { push @warnings, @_ };

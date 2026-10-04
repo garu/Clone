@@ -32,7 +32,7 @@ BEGIN {
         or plan skip_all => 'threads not loadable';
 }
 
-plan tests => 11;
+plan tests => 13;
 
 use Clone qw(clone);
 
@@ -249,6 +249,46 @@ sub in_thread {
     is($tied_ok, 1, 'every level of the deep tied chain is still tied');
 }
 
+# --- Deep chain of tied *scalars* -----------------------------------
+# Same shape as above but through scalar leaves: each tie object holds a
+# reference to the next tied scalar, so the chain is only reachable via
+# clone_magic.  A scalar leaf is cloned by sv_clone, not clone_drain; if
+# sv_clone clones its magic with a NULL queue, every level re-enters
+# rv_clone_iterative and nests a fresh drain -- a block of C frames per
+# level -- which overflows this stack well before the last level.
+{
+    my $TIED_DEPTH = 5_000;
+
+    my $got = in_thread(sub {
+        my $prev;
+        my @keep;
+        for (1 .. $TIED_DEPTH) {
+            my $x;
+            tie $x, 'Deep::TieScalar', { next => $prev };
+            push @keep, \$x;       # keep every level alive
+            $prev = \$x;
+        }
+
+        my $cloned = clone($prev);
+
+        my $measured = 0;
+        my $obj      = tied ${$cloned};
+        my $tied_ok  = defined $obj ? 1 : 0;
+        while ( $obj && ref $obj->{next} ) {
+            my $next = $obj->{next};
+            $obj = tied ${$next};
+            $measured++;
+            $tied_ok = 0 unless defined $obj;
+        }
+        return join ':', $measured, $tied_ok;
+    });
+
+    my ($measured, $tied_ok) = split /:/, ($got || '');
+    is($measured, $TIED_DEPTH - 1,
+       "$TIED_DEPTH-deep tied scalar chain clones to full depth on a small stack");
+    is($tied_ok, 1, 'every level of the deep tied scalar chain is still tied');
+}
+
 {
     package Deep::Tie;
     sub TIEHASH  { bless {}, shift }
@@ -256,4 +296,11 @@ sub in_thread {
     sub STORE    { $_[0]->{ $_[1] } = $_[2] }
     sub FIRSTKEY { my $s = shift; scalar keys %$s; each %$s }
     sub NEXTKEY  { each %{ $_[0] } }
+}
+
+{
+    package Deep::TieScalar;
+    sub TIESCALAR { my ($class, $state) = @_; bless $state, $class }
+    sub FETCH     { 'v' }
+    sub STORE     { }
 }
