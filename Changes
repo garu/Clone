@@ -1,6 +1,9 @@
 Revision history for Perl module Clone
 
 0.52 (unreleased)
+  - fix: restrict svt_dup calls with NULL CLONE_PARAMS to explicitly
+    supported classes (e.g. Math::BigInt::GMP), avoiding crashes in
+    other XS magic callbacks (e.g. Hash::SharedMem)
   - fix: stop using the 5.10 defined-or operator (//) in t/16 and t/17,
     which made both files fail to compile on threaded perl 5.8 (GH #162)
   - test: add t/33-perl58-syntax.t, a static check guarding shipped

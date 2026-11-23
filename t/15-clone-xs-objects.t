@@ -118,4 +118,21 @@ SKIP: {
         or diag("bstr() died: $@");
 }
 
+# --- Hash::SharedMem regression test ---
+# Verify that cloning an object with ext magic whose callback expects
+# CLONE_PARAMS does not cause a SIGSEGV. We conservatively skip cloning
+# the magic for unvetted classes, so this tests crash avoidance (process survival),
+# not subsequent functionality of the un-cloned handle.
+
+SKIP: {
+    eval { require Hash::SharedMem };
+    skip 'Hash::SharedMem not available', 1 if $@;
+
+    my $shash = eval { Hash::SharedMem::shash_open(undef, 'rwc') };
+    skip "Failed to open Hash::SharedMem: $@", 1 if $@ || !$shash;
+
+    my $cloned = eval { clone($shash) };
+    ok(!$@, 'clone(Hash::SharedMem) does not cause SIGSEGV');
+}
+
 done_testing();
