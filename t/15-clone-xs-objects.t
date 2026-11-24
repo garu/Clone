@@ -14,6 +14,7 @@ use strict;
 use warnings;
 use Test::More;
 use Clone qw(clone);
+use File::Temp qw(tempdir);
 use Scalar::Util qw(refaddr);
 
 # --- Control tests: Clone handles Regexp and basic blessed refs fine ---
@@ -128,7 +129,8 @@ SKIP: {
     eval { require Hash::SharedMem };
     skip 'Hash::SharedMem not available', 1 if $@;
 
-    my $shash = eval { Hash::SharedMem::shash_open(undef, 'rwc') };
+    my $dir = tempdir(CLEANUP => 1);
+    my $shash = eval { Hash::SharedMem::shash_open("$dir/testpath", 'rwc') };
     skip "Failed to open Hash::SharedMem: $@", 1 if $@ || !$shash;
 
     my $cloned = eval { clone($shash) };
