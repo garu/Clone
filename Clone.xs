@@ -90,6 +90,39 @@ static int clone_magic(SV *, SV *, HV *, int, AV *);
 #define TRACEME(a)
 #endif
 
+/* Only invoke svt_dup with NULL CLONE_PARAMS for classes whose
+ * callbacks are explicitly known to work without it.
+ * Some callbacks dereference param or pass it to Perl_sv_dup_inc(),
+ * which requires a valid CLONE_PARAMS. */
+static int
+is_safe_for_null_param_dup(SV *ref, MAGIC *mg)
+{
+  HV *stash;
+  const char *name;
+
+  if (!mg || !mg->mg_virtual || !mg->mg_virtual->svt_dup)
+    return 0;
+
+  /* Conservatively skip magic with mg_obj, since callbacks may use
+   * it with Perl_sv_dup_inc(), which requires a valid CLONE_PARAMS. */
+  if (mg->mg_obj != NULL)
+    return 0;
+
+  if (!ref || !SvOBJECT(ref))
+    return 0;
+
+  stash = SvSTASH(ref);
+  if (!stash || !(name = HvNAME(stash)))
+    return 0;
+
+  /* Math::BigInt::GMP (GH #16) duplicates its underlying mpz_t via
+   * mg_ptr without accessing CLONE_PARAMS. */
+  if (strEQ(name, "Math::BigInt::GMP"))
+    return 1;
+
+  return 0;
+}
+
 /* Check whether an mg_obj is a threads::shared::tie instance.
  * The mg_obj is an RV pointing to a blessed PVMG. (GH #18) */
 static int
@@ -582,21 +615,18 @@ clone_magic(SV * ref, SV * clone, HV* hseen, int rdepth, AV * weakrefs)
       if (mg->mg_type == '~')
       {
 #if defined(MGf_DUP) && defined(sv_magicext)
-        /* If the ext magic has a dup callback (e.g. Math::BigInt::GMP),
-         * clone it properly via sv_magicext + svt_dup.
-         * Otherwise skip it (e.g. DBI handles have no dup).
-         * Note: we check only for svt_dup presence, not MGf_DUP flag,
-         * because some older XS modules (e.g. Math::BigInt::GMP on
-         * Perl 5.22) provide svt_dup without setting MGf_DUP. (GH #76) */
-        if (mg->mg_virtual && mg->mg_virtual->svt_dup)
+        /* Clone cannot provide a valid CLONE_PARAMS here.
+         * Only invoke svt_dup for explicitly vetted classes known to
+         * work with NULL (e.g. Math::BigInt::GMP from GH #16).
+         * Skip other ext magic to avoid crashes in their callbacks.
+         * (GH #27, Hash::SharedMem SEGV fix) */
+        if (is_safe_for_null_param_dup(ref, mg))
         {
           MAGIC *new_mg;
           new_mg = sv_magicext(clone, mg->mg_obj,
                                mg->mg_type, mg->mg_virtual,
                                mg->mg_ptr, mg->mg_len);
           new_mg->mg_flags |= MGf_DUP;
-          /* CLONE_PARAMS is NULL since we are not in a thread clone.
-           * Known callers (e.g. Math::BigInt::GMP) ignore it. */
           mg->mg_virtual->svt_dup(aTHX_ new_mg, NULL);
         }
 #endif

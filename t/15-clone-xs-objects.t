@@ -14,6 +14,7 @@ use strict;
 use warnings;
 use Test::More;
 use Clone qw(clone);
+use File::Temp qw(tempdir);
 use Scalar::Util qw(refaddr);
 
 # --- Control tests: Clone handles Regexp and basic blessed refs fine ---
@@ -116,6 +117,24 @@ SKIP: {
     my $value = eval { $cloned->bstr() };
     ok(!$@, 'bstr() on cloned float does not die')
         or diag("bstr() died: $@");
+}
+
+# --- Hash::SharedMem regression test ---
+# Verify that cloning an object with ext magic whose callback expects
+# CLONE_PARAMS does not cause a SIGSEGV. We conservatively skip cloning
+# the magic for unvetted classes, so this tests crash avoidance (process survival),
+# not subsequent functionality of the un-cloned handle.
+
+SKIP: {
+    eval { require Hash::SharedMem };
+    skip 'Hash::SharedMem not available', 1 if $@;
+
+    my $dir = tempdir(CLEANUP => 1);
+    my $shash = eval { Hash::SharedMem::shash_open("$dir/testpath", 'rwc') };
+    skip "Failed to open Hash::SharedMem: $@", 1 if $@ || !$shash;
+
+    my $cloned = eval { clone($shash) };
+    ok(!$@, 'clone(Hash::SharedMem) does not cause SIGSEGV');
 }
 
 done_testing();
